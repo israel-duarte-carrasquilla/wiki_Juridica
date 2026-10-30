@@ -1,0 +1,18 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Scratch & inspection temporary files
+drive_page.html
+ds1_data.json
+ds3_data.json
+all_folder_items.json
+subfolder_items.json
+tutelas_found.json
+sample_t001_24.json
+all_drive_files.json
+
+# Keep database, code and distribution files
+!jurisprudencia_db.json
+!wiki_juridica_cpanel.zip

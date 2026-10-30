@@ -1,0 +1,29 @@
+# Configuración Apache para Spaceship cPanel
+<IfModule mod_mime.c>
+    AddDefaultCharset UTF-8
+    AddCharset UTF-8 .html .css .js .json .php
+    AddType application/json .json
+</IfModule>
+
+# Habilitar compresión Gzip para mayor velocidad
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css text/javascript application/javascript application/json
+</IfModule>
+
+# Cache de archivos estáticos
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 1 month"
+    ExpiresByType application/javascript "access plus 1 month"
+    ExpiresByType application/json "access plus 1 day"
+    ExpiresByType image/svg+xml "access plus 1 month"
+</IfModule>
+
+# Seguridad
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+</IfModule>
+
+DirectoryIndex index.php index.html
