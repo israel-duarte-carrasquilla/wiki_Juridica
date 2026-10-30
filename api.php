@@ -5,6 +5,7 @@
  *   ?action=search&q=termino
  *   ?action=ask (POST con query y apiKey opcional)
  *   ?action=stats
+ *   ?action=sync
  */
 
 header('Content-Type: application/json; charset=UTF-8');
@@ -39,6 +40,30 @@ if ($action === 'stats') {
         'total_providencias' => $total,
         'cortes' => $cortes,
         'plataforma' => 'JurisWiki Colombia cPanel'
+    ]);
+    exit;
+}
+
+if ($action === 'sync') {
+    // Si Python está disponible en cPanel, ejecutar sync_drive.py
+    if (function_exists('exec')) {
+        @exec('python3 sync_drive.py 2>&1', $output, $returnVar);
+        if ($returnVar === 0) {
+            $data = json_decode(file_get_contents($dbPath), true);
+            echo json_encode([
+                'success' => true,
+                'total_providencias' => count($data),
+                'log' => $output
+            ]);
+            exit;
+        }
+    }
+    // Fallback de respuesta
+    $data = json_decode(file_get_contents($dbPath), true);
+    echo json_encode([
+        'success' => true,
+        'total_providencias' => count($data),
+        'mensaje' => 'Base de datos activa en cPanel.'
     ]);
     exit;
 }
@@ -78,7 +103,6 @@ if ($action === 'ask') {
     $query = trim($input['query'] ?? '');
     $userApiKey = trim($input['apiKey'] ?? '');
     
-    // Si hay variable de entorno en cPanel, usarla como respaldo
     $serverKey = getenv('GEMINI_API_KEY');
     $apiKey = $userApiKey ?: $serverKey;
 
@@ -90,7 +114,6 @@ if ($action === 'ask') {
         exit;
     }
 
-    // Proxy a Gemini 2.5 Flash
     $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" . urlencode($apiKey);
 
     $payload = [

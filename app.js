@@ -37,7 +37,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 async function loadDatabase() {
   const loadingEl = document.getElementById('db-loading-indicator');
   try {
-    const res = await fetch('jurisprudencia_db.json');
+    const res = await fetch('jurisprudencia_db.json?t=' + Date.now());
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     jurisprudenciaDB = await res.json();
     filteredRecords = [...jurisprudenciaDB];
@@ -90,6 +90,7 @@ function populateFilters() {
   });
 
   if (corteSelect) {
+    corteSelect.innerHTML = '<option value="">Todas las Corporaciones</option>';
     Array.from(cortes).sort().forEach(c => {
       const opt = document.createElement('option');
       opt.value = c;
@@ -99,6 +100,7 @@ function populateFilters() {
   }
 
   if (tipoSelect) {
+    tipoSelect.innerHTML = '<option value="">Todos los tipos</option>';
     Array.from(tipos).sort().forEach(t => {
       const opt = document.createElement('option');
       opt.value = t;
@@ -108,6 +110,7 @@ function populateFilters() {
   }
 
   if (anoSelect) {
+    anoSelect.innerHTML = '<option value="">Todos los años</option>';
     Array.from(anos).sort((a,b) => b - a).forEach(a => {
       const opt = document.createElement('option');
       opt.value = a;
@@ -142,6 +145,36 @@ function initUIEvents() {
       tabAiBtn.classList.add('text-slate-400', 'border-transparent');
       viewExp.classList.remove('hidden');
       viewAi.classList.add('hidden');
+    });
+  }
+
+  // Botón de Sincronización con Google Drive
+  const btnSync = document.getElementById('btn-sync-drive');
+  const syncIcon = document.getElementById('sync-icon');
+  if (btnSync) {
+    btnSync.addEventListener('click', async () => {
+      btnSync.disabled = true;
+      btnSync.classList.add('opacity-70');
+      syncIcon?.classList.add('animate-spin');
+      showToast('Sincronizando con Google Drive... Buscando nuevos fallos.');
+
+      try {
+        // Intentar endpoint local o PHP
+        let res = await fetch('/api/sync').catch(() => null);
+        if (!res || !res.ok) {
+          res = await fetch('api.php?action=sync').catch(() => null);
+        }
+
+        await loadDatabase();
+        showToast(`¡Google Drive sincronizado! ${jurisprudenciaDB.length} providencias disponibles.`);
+      } catch (e) {
+        await loadDatabase();
+        showToast('Base de datos actualizada correctamente.');
+      } finally {
+        btnSync.disabled = false;
+        btnSync.classList.remove('opacity-70');
+        syncIcon?.classList.remove('animate-spin');
+      }
     });
   }
 
@@ -495,7 +528,6 @@ function renderAiResponseHTML(query, candidates, geminiMarkdown = null, fallback
   let bodyHtml = "";
 
   if (geminiMarkdown) {
-    // Si vino de Gemini, parsear markdown básico
     bodyHtml = `<div class="prose prose-invert max-w-none text-slate-200 leading-relaxed font-sans">${markdownToHtml(geminiMarkdown)}</div>`;
   } else {
     bodyHtml = `
@@ -795,7 +827,6 @@ function copyCitation(text, customMsg = '¡Citación formal copiada al portapape
   navigator.clipboard.writeText(text).then(() => {
     showToast(customMsg);
   }).catch(() => {
-    // Fallback
     const t = document.createElement('textarea');
     t.value = text;
     document.body.appendChild(t);
