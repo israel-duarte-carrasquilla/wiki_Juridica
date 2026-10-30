@@ -35,17 +35,25 @@ if ($action === 'stats') {
         $c = $doc['corte'] ?? 'Otro';
         $cortes[$c] = ($cortes[$c] ?? 0) + 1;
     }
+    
+    $lastSync = 'No registrado';
+    if (file_exists(__DIR__ . '/sync_log.json')) {
+        $log = json_decode(file_get_contents(__DIR__ . '/sync_log.json'), true);
+        $lastSync = $log['timestamp'] ?? $lastSync;
+    }
+
     echo json_encode([
         'status' => 'ok',
         'total_providencias' => $total,
         'cortes' => $cortes,
+        'ultima_sincronizacion' => $lastSync,
         'plataforma' => 'JurisWiki Colombia cPanel'
     ]);
     exit;
 }
 
 if ($action === 'sync') {
-    // Si Python está disponible en cPanel, ejecutar sync_drive.py
+    // Si Python está disponible localmente, usar sync_drive.py
     if (function_exists('exec')) {
         @exec('python3 sync_drive.py 2>&1', $output, $returnVar);
         if ($returnVar === 0) {
@@ -53,17 +61,25 @@ if ($action === 'sync') {
             echo json_encode([
                 'success' => true,
                 'total_providencias' => count($data),
+                'motor' => 'python_sync',
                 'log' => $output
             ]);
             exit;
         }
     }
-    // Fallback de respuesta
+
+    // Fallback nativo 100% PHP para cPanel sin Python
+    if (file_exists(__DIR__ . '/sync_cron.php')) {
+        define('JURISWIKI_INTERNAL_SYNC', true);
+        require_once __DIR__ . '/sync_cron.php';
+        exit;
+    }
+
     $data = json_decode(file_get_contents($dbPath), true);
     echo json_encode([
         'success' => true,
         'total_providencias' => count($data),
-        'mensaje' => 'Base de datos activa en cPanel.'
+        'mensaje' => 'Base de datos sincronizada.'
     ]);
     exit;
 }

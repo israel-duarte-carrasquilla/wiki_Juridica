@@ -7,6 +7,7 @@ files_to_include = [
     'index.html',
     'index.php',
     'api.php',
+    'sync_cron.php',
     '.htaccess',
     'style.css',
     'app.js',
@@ -22,26 +23,47 @@ with zipfile.ZipFile(zip_filename, 'w', compression=zipfile.ZIP_DEFLATED) as zip
         else:
             print(f"  ! Missing: {fn}")
 
-# Also add README_CPANEL.md with instructions
-cpanel_instructions = """# JurisWiki Colombia - Despliegue en Spaceship cPanel
+# Documentación para cPanel
+cpanel_instructions = """# JurisWiki Colombia - Guía de Configuración y Auto-Actualización en Spaceship cPanel
 
-## Instrucciones de Instalación en cPanel:
+## 1. Instalación Inicial en Spaceship cPanel
+1. Ingresa a tu panel de **Spaceship cPanel**.
+2. Abre el **Administrador de Archivos** (File Manager).
+3. Entra a tu carpeta raíz (usualmente `public_html`).
+4. Haz clic en **Cargar** (Upload) y sube `wiki_juridica_cpanel.zip`.
+5. Selecciona el archivo y haz clic en **Extraer** (Extract).
+6. ¡Listo! Tu web ya está en línea.
 
-1. Ingresa a tu panel de control de **Spaceship cPanel**.
-2. Dirígete a **Administrador de Archivos** (File Manager).
-3. Entra a la carpeta de tu dominio o subdominio (generalmente `public_html` o `public_html/wiki`).
-4. Haz clic en **Cargar** (Upload) y sube este archivo `wiki_juridica_cpanel.zip`.
-5. Selecciona el archivo subido y haz clic en **Extraer** (Extract).
-6. ¡Listo! Abre tu dominio en el navegador (ejemplo: `https://tudominio.com`).
+---
 
-### Contenido incluido:
-- `index.html`: Interfaz web moderna con motor de IA y explorador.
-- `index.php`: Punto de entrada PHP para servidores Apache/cPanel.
-- `api.php`: Backend PHP para búsquedas y proxy de Gemini API.
-- `.htaccess`: Reglas de compresión Gzip, caché y tipos MIME.
-- `style.css`: Estilos legales personalizados (Tailwind + CSS).
-- `app.js`: Motor de consulta, búsqueda RAG y conexión a IA.
-- `jurisprudencia_db.json`: Base de datos de 387 providencias indexadas con temas y resuelve.
+## 2. Configuración de la Actualización Automática en cPanel
+
+En cPanel tienes 2 formas de automatizar la sincronización con Google Drive:
+
+### Opción A: Cron Job Nativo en cPanel (Recomendado)
+1. En tu cPanel, busca y abre la herramienta **Tareas Cron** (Cron Jobs).
+2. En "Añadir nueva tarea cron", selecciona la frecuencia:
+   - **Una vez por hora** (`0 * * * *`) o **Una vez al día** (`0 2 * * *`).
+3. En el campo **Comando**, escribe una de estas dos opciones:
+
+   **Opción A.1 (Línea de comando PHP):**
+   ```bash
+   /usr/local/bin/php /home/TU_USUARIO/public_html/sync_cron.php >/dev/null 2>&1
+   ```
+   *(Reemplaza `TU_USUARIO` por tu usuario de cPanel)*
+
+   **Opción A.2 (Vía cURL / HTTP):**
+   ```bash
+   curl -s "https://tudominio.com/sync_cron.php?token=juriswiki2026" >/dev/null 2>&1
+   ```
+4. Haz clic en **Añadir nueva tarea cron**. A partir de ese momento, el servidor revisará automáticamente Google Drive en el intervalo fijado, descargará nuevos fallos y actualizará la base de datos sin que tengas que intervenir.
+
+---
+
+### Opción B: Botón Manual en la Web
+En cualquier momento, cualquier administrador o usuario puede hacer clic en el botón:
+👉 **`🔄 Sincronizar Drive`** ubicado en la barra superior de la página web.
+Esto ejecutará la sincronización en vivo y actualizará el catálogo de providencias en pantalla.
 """
 
 with open('README_CPANEL.md', 'w', encoding='utf-8') as f:
