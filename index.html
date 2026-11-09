@@ -379,31 +379,80 @@
   </aside>
 
   <!-- ==================================================================
-       MODAL DE CONFIGURACIÓN DE MOTOR IA (GEMINI API KEY)
+       MODAL DE CONFIGURACIÓN DE MOTOR IA MULTIMODELO (GEMINI, OPENAI, CLAUDE)
        ================================================================== -->
   <div id="modal-settings" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-    <div class="modal-card">
+    <div class="modal-card" style="max-width: 540px;">
       <div style="display: flex; align-items: center; justify-content: space-between; padding-bottom: 0.85rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle);">
-        <h3 id="settings-title" style="font-family: var(--font-serif); font-size: 1.2rem; font-weight: 700;">Configuración del Motor Jurídico</h3>
+        <h3 id="settings-title" style="font-family: var(--font-serif); font-size: 1.25rem; font-weight: 700;">Motor de Inteligencia Jurídica</h3>
         <button type="button" id="btn-close-settings" class="btn-utility" style="padding: 0.25rem 0.55rem;">✕</button>
       </div>
 
-      <p style="font-size: 0.86rem; color: var(--text-secondary); margin-bottom: 1rem; line-height: 1.55;">
-        La plataforma incorpora un <strong>Motor Local de Relatoría RAG</strong> con tesauro jurídico colombiano que opera de inmediato sin claves externas. Si deseas redacción generativa extendida con <strong>Google Gemini 2.5 Flash</strong>, introduce tu API Key opcional:
+      <p style="font-size: 0.84rem; color: var(--text-secondary); margin-bottom: 1.1rem; line-height: 1.5;">
+        Conecta tu propio plan o clave de API (<strong>ChatGPT, Claude, Google Gemini o DeepSeek</strong>) para obtener síntesis y redacción jurídica asistida con tus propios recursos. También puedes utilizar el motor RAG local gratuito integrado.
       </p>
 
-      <div class="filter-field" style="margin-bottom: 1.2rem;">
-        <label for="gemini-api-key-input">Clave de API de Google Gemini (Opcional)</label>
-        <input id="gemini-api-key-input" type="password" class="filter-input" placeholder="AIzaSy..." style="font-family: var(--font-mono);">
-        <span style="font-size: 0.72rem; color: var(--text-muted); display: block; margin-top: 0.35rem;">
-          Se almacena exclusivamente en la memoria local de tu navegador (<code>localStorage</code>).
-        </span>
+      <!-- Selector de Proveedor -->
+      <div class="filter-field" style="margin-bottom: 1rem;">
+        <label for="ai-provider-select">Proveedor de Inteligencia Artificial</label>
+        <select id="ai-provider-select" class="filter-select" style="font-weight: 600;">
+          <option value="gemini">Google Gemini (Gemini 2.5 Flash / 1.5 Pro) — Plan Gratuito & Pago</option>
+          <option value="openai">OpenAI ChatGPT (GPT-4o / GPT-4o-mini)</option>
+          <option value="claude">Anthropic Claude (Claude 3.5 Sonnet / 3.5 Haiku)</option>
+          <option value="deepseek">DeepSeek (DeepSeek V3 / R1)</option>
+          <option value="openrouter">OpenRouter (Agregador Multimodelo)</option>
+          <option value="local">Motor Local RAG Integrado (100% Offline y Gratuito)</option>
+        </select>
       </div>
 
-      <div style="display: flex; justify-content: flex-end; gap: 0.5rem;">
-        <button type="button" id="btn-save-api-key" class="btn-primary-consult btn-tactile">
-          Guardar Preferencia
+      <!-- Contenedor de Opciones Específicas por Proveedor -->
+      <div id="provider-config-fields">
+        <!-- Campo de API Key -->
+        <div class="filter-field" style="margin-bottom: 0.85rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem;">
+            <label id="lbl-api-key" for="ai-api-key-input">Clave de API (API Key)</label>
+            <a id="link-get-api-key" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" style="font-size: 0.72rem; color: var(--accent-primary); text-decoration: underline;">
+              Obtener clave &nearr;
+            </a>
+          </div>
+          <div style="position: relative;">
+            <input id="ai-api-key-input" type="password" class="filter-input" placeholder="AIzaSy..." style="font-family: var(--font-mono); padding-right: 2.5rem;">
+            <button type="button" id="btn-toggle-key-visibility" style="position: absolute; right: 0.6rem; top: 50%; transform: translateY(-50%); font-size: 0.85rem; color: var(--text-muted); cursor: pointer;" title="Mostrar u ocultar clave">
+              👁
+            </button>
+          </div>
+        </div>
+
+        <!-- Selector de Modelo Específico -->
+        <div class="filter-field" style="margin-bottom: 1.1rem;">
+          <label for="ai-model-select">Modelo de Inteligencia Artificial</label>
+          <select id="ai-model-select" class="filter-select" style="font-family: var(--font-mono); font-size: 0.8rem;"></select>
+        </div>
+      </div>
+
+      <!-- Mensaje para Motor Local -->
+      <div id="local-engine-notice" class="hidden" style="background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.85rem 1rem; margin-bottom: 1.1rem; font-size: 0.82rem; color: var(--text-secondary);">
+        ✓ <strong>Modo Privado & Sin Costo:</strong> El motor RAG local analiza descriptores y antecedentes mediante el tesauro jurídico colombiano sin enviar datos a APIs externas.
+      </div>
+
+      <!-- Aviso de Privacidad y Seguridad -->
+      <div style="background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.75rem 0.9rem; margin-bottom: 1.25rem; font-size: 0.72rem; color: var(--text-muted); line-height: 1.45;">
+        🔒 <strong>Privacidad Total:</strong> Tu clave se almacena exclusivamente en tu navegador (<code>localStorage</code>) y se utiliza únicamente para autorizar tus consultas. Jamás se comparte ni se guarda en bases de datos de terceros.
+      </div>
+
+      <!-- Acciones del Modal -->
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+        <button type="button" id="btn-test-ai-key" class="btn-utility btn-tactile" style="font-size: 0.78rem;">
+          ⚡ Probar Conexión
         </button>
+        <div style="display: flex; gap: 0.5rem;">
+          <button type="button" id="btn-clear-ai-config" class="btn-utility btn-tactile" style="font-size: 0.78rem;">
+            Restablecer
+          </button>
+          <button type="button" id="btn-save-ai-config" class="btn-primary-consult btn-tactile">
+            Guardar y Activar
+          </button>
+        </div>
       </div>
     </div>
   </div>

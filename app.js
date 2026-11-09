@@ -33,6 +33,73 @@ const LEGAL_THESAURUS = {
   contractual: ['contrato estatal', 'liquidacion', 'incumplimiento', 'controversias contractuales', 'seccion tercera']
 };
 
+// Proveedores de Inteligencia Artificial Soportados (OpenAI ChatGPT, Anthropic Claude, Google Gemini, DeepSeek)
+const AI_PROVIDERS = {
+  gemini: {
+    name: 'Google Gemini',
+    badge: 'Gemini',
+    placeholder: 'AIzaSy...',
+    helpUrl: 'https://aistudio.google.com/app/apikey',
+    helpText: 'Obtener clave gratuita en Google AI Studio ↗',
+    models: [
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash (Recomendado — Rápido y Actualizado)' },
+      { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (Económico)' },
+      { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro (Razonamiento Complejo)' }
+    ]
+  },
+  openai: {
+    name: 'OpenAI ChatGPT',
+    badge: 'ChatGPT',
+    placeholder: 'sk-...',
+    helpUrl: 'https://platform.openai.com/api-keys',
+    helpText: 'Obtener clave en OpenAI Platform ↗',
+    models: [
+      { id: 'gpt-4o-mini', name: 'GPT-4o-mini (Recomendado — Ultrarrápido y Muy Económico)' },
+      { id: 'gpt-4o', name: 'GPT-4o (Máxima Capacidad de Redacción)' },
+      { id: 'o1-mini', name: 'o1-mini (Razonamiento Lógico Profundo)' }
+    ]
+  },
+  claude: {
+    name: 'Anthropic Claude',
+    badge: 'Claude',
+    placeholder: 'sk-ant-...',
+    helpUrl: 'https://console.anthropic.com/settings/keys',
+    helpText: 'Obtener clave en Anthropic Console ↗',
+    models: [
+      { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku (Recomendado — Alta Velocidad)' },
+      { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet (Estándar en Análisis Jurídico)' }
+    ]
+  },
+  deepseek: {
+    name: 'DeepSeek',
+    badge: 'DeepSeek',
+    placeholder: 'sk-...',
+    helpUrl: 'https://platform.deepseek.com/api_keys',
+    helpText: 'Obtener clave en DeepSeek Platform ↗',
+    models: [
+      { id: 'deepseek-chat', name: 'DeepSeek-V3 (Chat — Alta Calidad a Bajo Costo)' },
+      { id: 'deepseek-reasoner', name: 'DeepSeek-R1 (Razonamiento Jurídico Paso a Paso)' }
+    ]
+  },
+  openrouter: {
+    name: 'OpenRouter',
+    badge: 'OpenRouter',
+    placeholder: 'sk-or-...',
+    helpUrl: 'https://openrouter.ai/keys',
+    helpText: 'Obtener clave en OpenRouter ↗',
+    models: [
+      { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3 (vía OpenRouter)' },
+      { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct' },
+      { id: 'anthropic/claude-3.5-haiku', name: 'Claude 3.5 Haiku (vía OpenRouter)' }
+    ]
+  },
+  local: {
+    name: 'Motor Local RAG',
+    badge: 'RAG Local',
+    models: []
+  }
+};
+
 // ==========================================================================
 // INICIALIZACIÓN
 // ==========================================================================
@@ -504,22 +571,8 @@ function initUIEvents() {
   document.getElementById('btn-close-detail')?.addEventListener('click', closeDetailDrawer);
   document.getElementById('drawer-backdrop')?.addEventListener('click', closeDetailDrawer);
 
-  // Modal de Configuración de API Key
-  const btnSettings = document.getElementById('btn-settings');
-  const modalSettings = document.getElementById('modal-settings');
-  const btnCloseSettings = document.getElementById('btn-close-settings');
-  const btnSaveApiKey = document.getElementById('btn-save-api-key');
-  const apiKeyInput = document.getElementById('gemini-api-key-input');
-
-  btnSettings?.addEventListener('click', () => modalSettings?.classList.remove('hidden'));
-  btnCloseSettings?.addEventListener('click', () => modalSettings?.classList.add('hidden'));
-  btnSaveApiKey?.addEventListener('click', () => {
-    const key = apiKeyInput?.value.trim() || '';
-    localStorage.setItem('GEMINI_API_KEY', key);
-    modalSettings?.classList.add('hidden');
-    updateApiKeyBadge();
-    showToast(key ? 'Clave API de Gemini activada.' : 'Usando Motor de Relatoría Local RAG.');
-  });
+  // Inicializar Modal de Configuración Multimodelo IA
+  initAiSettingsModal();
 
   // Atajos de teclado globales ('/' para buscar, 'Esc' para cerrar inspector)
   document.addEventListener('keydown', (e) => {
@@ -570,7 +623,7 @@ window.filterCatalogByCorte = function(corte) {
 };
 
 // ==========================================================================
-// MOTOR DE CONSULTA E INTELIGENCIA ARTIFICIAL (RAG + GEMINI)
+// MOTOR DE CONSULTA E INTELIGENCIA ARTIFICIAL MULTIMODELO (GEMINI, OPENAI, CLAUDE)
 // ==========================================================================
 async function runAiConsultation(query) {
   const resultContainer = document.getElementById('ai-results-container');
@@ -585,22 +638,154 @@ async function runAiConsultation(query) {
   loadingIndicator?.classList.remove('hidden');
 
   const relevantDocs = retrieveRelevantDocuments(query, 8, scopeVal);
-  const apiKey = localStorage.getItem('GEMINI_API_KEY');
+
+  const provider = localStorage.getItem('JURISWIKI_AI_PROVIDER') || (localStorage.getItem('GEMINI_API_KEY') ? 'gemini' : 'local');
+  const apiKey = localStorage.getItem(`JURISWIKI_KEY_${provider}`) || (provider === 'gemini' ? localStorage.getItem('GEMINI_API_KEY') : '') || '';
+  const model = localStorage.getItem(`JURISWIKI_MODEL_${provider}`) || '';
 
   try {
-    if (apiKey && apiKey.length > 10) {
-      await askGeminiApi(query, relevantDocs, apiKey);
+    if (provider !== 'local' && apiKey && apiKey.length > 5) {
+      await callMultiProviderAI(query, relevantDocs, provider, model, apiKey);
     } else {
-      await new Promise(r => setTimeout(r, 320));
+      await new Promise(r => setTimeout(r, 280));
       renderLocalRagResponse(query, relevantDocs);
     }
   } catch (err) {
-    console.warn('Usando síntesis local de respaldo:', err);
+    console.warn(`Llamada a ${provider} falló, utilizando motor RAG local de respaldo:`, err);
+    showToast(`Nota: ${AI_PROVIDERS[provider]?.name || 'El proveedor'} reportó un aviso. Mostrando síntesis jurídica del motor local.`);
     renderLocalRagResponse(query, relevantDocs);
   } finally {
     loadingIndicator?.classList.add('hidden');
     resultContainer?.classList.remove('hidden');
   }
+}
+
+// Invocación a cualquier proveedor de IA configurado por el usuario
+async function callMultiProviderAI(query, candidates, provider, model, apiKey) {
+  const contextDocs = candidates.slice(0, 6).map((d, idx) => `
+[PROVIDENCIA ${idx + 1}]
+- Radicado: ${d.radicado} (${d.corte})
+- Magistrado Ponente: ${d.magistrado_ponente || 'En relatoría'}
+- Fecha: ${d.fecha_providencia || d.ano}
+- Tema: ${d.tema}
+- RESUELVE: ${d.resuelve ? d.resuelve.substring(0, 1800) : 'Ver documento'}
+- Citación Formal: ${d.citacion_formal}`).join('\n');
+
+  const systemPrompt = `Eres un Relator Judicial experto en derecho constitucional y jurisprudencia colombiana de JurisWiki.
+Tu tarea es analizar la consulta jurídica planteada frente a las sentencias suministradas del archivo judicial.
+Redacta un dictamen ejecutivo formal (2 a 3 párrafos) explicando qué decisiones aplican exactamente al caso, su ratio decidendi y la consecuencia jurídica ordenada en la parte resolutiva. Cita los radicados y resuelves con rigor.`;
+
+  const userPrompt = `Consulta del abogado: "${query}"\n\nProvidencias auténticas del acervo jurisprudencial:\n${contextDocs}`;
+
+  // Intento 1: Llamada directa desde el navegador (alta velocidad)
+  try {
+    if (provider === 'gemini') {
+      const useModel = model || 'gemini-2.5-flash';
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent?key=${apiKey}`;
+      const payload = {
+        contents: [{ parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 1500 }
+      };
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (text) {
+          renderAiResponseHTML(query, candidates, text);
+          return;
+        }
+      }
+    } else if (provider === 'openai') {
+      const useModel = model || 'gpt-4o-mini';
+      const endpoint = 'https://api.openai.com/v1/chat/completions';
+      const payload = {
+        model: useModel,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 1500
+      };
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const text = data.choices?.[0]?.message?.content || '';
+        if (text) {
+          renderAiResponseHTML(query, candidates, text);
+          return;
+        }
+      }
+    } else if (provider === 'claude') {
+      const useModel = model || 'claude-3-5-haiku-20241022';
+      const endpoint = 'https://api.anthropic.com/v1/messages';
+      const payload = {
+        model: useModel,
+        max_tokens: 1500,
+        temperature: 0.2,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }]
+      };
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const text = data.content?.[0]?.text || '';
+        if (text) {
+          renderAiResponseHTML(query, candidates, text);
+          return;
+        }
+      }
+    }
+  } catch (directErr) {
+    console.log('Llamada directa al proveedor con aviso CORS/red, usando backend proxy...', directErr);
+  }
+
+  // Intento 2: Backend Proxy (server.py en local o api.php en cPanel Spaceship)
+  const proxyEndpoint = (window.location.pathname.endsWith('.php') || window.location.hostname.includes('.'))
+    ? 'api.php?action=ask_ai'
+    : '/api/ask';
+
+  const proxyRes = await fetch(proxyEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider,
+      model,
+      apiKey,
+      query,
+      systemPrompt,
+      context: contextDocs
+    })
+  });
+
+  if (!proxyRes.ok) {
+    throw new Error(`Error en llamada al proxy de IA (${proxyRes.status})`);
+  }
+
+  const proxyData = await proxyRes.json();
+  const answerText = proxyData.text || proxyData.content || (proxyData.choices?.[0]?.message?.content) || '';
+  if (!answerText) throw new Error('Respuesta vacía del proveedor');
+  renderAiResponseHTML(query, candidates, answerText);
 }
 
 function retrieveRelevantDocuments(query, limit = 8, scopeFilter = '') {
@@ -689,40 +874,6 @@ function renderLocalRagResponse(query, candidates) {
   }
 
   renderAiResponseHTML(query, candidates, null, synthesisHtml);
-}
-
-async function askGeminiApi(query, candidates, apiKey) {
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-  const contextDocs = candidates.slice(0, 6).map((d, idx) => `
-[PROVIDENCIA ${idx + 1}]
-- Radicado: ${d.radicado} (${d.corte})
-- Magistrado Ponente: ${d.magistrado_ponente || 'En relatoría'}
-- Fecha: ${d.fecha_providencia || d.ano}
-- Tema: ${d.tema}
-- RESUELVE: ${d.resuelve ? d.resuelve.substring(0, 1800) : 'Ver documento'}
-- Citación Formal: ${d.citacion_formal}`).join('\n');
-
-  const prompt = `Actúa como Relator Judicial experto en derecho colombiano.
-Consulta del abogado: "${query}"
-
-Providencias del archivo:
-${contextDocs}
-
-Redacta un dictamen ejecutivo breve (máximo 2 párrafos) explicando qué sentencias de la lista aplican al caso y cuál es la regla jurisprudencial o decisión adoptada en sus resuelves. Sé sobrio, preciso y directo.`;
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 1024 }
-    })
-  });
-
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  renderAiResponseHTML(query, candidates, text);
 }
 
 function renderAiResponseHTML(query, candidates, geminiMarkdown = null, fallbackHtml = '') {
@@ -1404,20 +1555,227 @@ window.copyTextWithFeedback = function(text, message = 'Copiado al portapapeles'
 // ==========================================================================
 // UTILIDADES
 // ==========================================================================
+// ==========================================================================
+// CONFIGURACIÓN MULTIMODELO IA (OPENAI, CLAUDE, GEMINI, DEEPSEEK)
+// ==========================================================================
+function initAiSettingsModal() {
+  const btnSettings = document.getElementById('btn-settings');
+  const modalSettings = document.getElementById('modal-settings');
+  const btnCloseSettings = document.getElementById('btn-close-settings');
+  const providerSelect = document.getElementById('ai-provider-select');
+  const apiKeyInput = document.getElementById('ai-api-key-input');
+  const modelSelect = document.getElementById('ai-model-select');
+  const btnToggleKey = document.getElementById('btn-toggle-key-visibility');
+  const btnTestKey = document.getElementById('btn-test-ai-key');
+  const btnSave = document.getElementById('btn-save-ai-config');
+  const btnClear = document.getElementById('btn-clear-ai-config');
+
+  btnSettings?.addEventListener('click', () => {
+    loadSavedAiConfigToModal();
+    modalSettings?.classList.remove('hidden');
+  });
+
+  btnCloseSettings?.addEventListener('click', () => modalSettings?.classList.add('hidden'));
+
+  // Toggle visibilidad de clave
+  btnToggleKey?.addEventListener('click', () => {
+    if (apiKeyInput) {
+      apiKeyInput.type = apiKeyInput.type === 'password' ? 'text' : 'password';
+      btnToggleKey.textContent = apiKeyInput.type === 'password' ? '👁' : '🔒';
+    }
+  });
+
+  // Cambio de proveedor en el select
+  providerSelect?.addEventListener('change', () => {
+    const provKey = providerSelect.value;
+    updateModalFieldsForProvider(provKey);
+  });
+
+  // Botón probar clave
+  btnTestKey?.addEventListener('click', async () => {
+    const provKey = providerSelect?.value || 'gemini';
+    const key = apiKeyInput?.value.trim() || '';
+    const model = modelSelect?.value || '';
+
+    if (provKey === 'local') {
+      showToast('✓ El motor RAG local está 100% operativo sin claves.');
+      return;
+    }
+
+    if (!key) {
+      showToast(`Ingresa una clave de API para probar ${AI_PROVIDERS[provKey]?.name || 'el modelo'}.`);
+      apiKeyInput?.focus();
+      return;
+    }
+
+    btnTestKey.disabled = true;
+    btnTestKey.textContent = 'Probando conexión...';
+
+    try {
+      const ok = await testAiConnection(provKey, model, key);
+      if (ok) {
+        showToast(`✓ ¡Conexión exitosa con ${AI_PROVIDERS[provKey]?.name}! Tu plan y clave son válidos.`);
+      } else {
+        showToast(`✗ No se pudo conectar. Verifica que la clave de ${AI_PROVIDERS[provKey]?.name} sea correcta y tenga cuota activa.`);
+      }
+    } catch (e) {
+      showToast(`✗ Error al validar clave: ${e.message}`);
+    } finally {
+      btnTestKey.disabled = false;
+      btnTestKey.textContent = '⚡ Probar Conexión';
+    }
+  });
+
+  // Botón guardar
+  btnSave?.addEventListener('click', () => {
+    const prov = providerSelect?.value || 'gemini';
+    const key = apiKeyInput?.value.trim() || '';
+    const model = modelSelect?.value || '';
+
+    localStorage.setItem('JURISWIKI_AI_PROVIDER', prov);
+    if (prov !== 'local') {
+      localStorage.setItem(`JURISWIKI_KEY_${prov}`, key);
+      localStorage.setItem(`JURISWIKI_MODEL_${prov}`, model);
+      if (prov === 'gemini') localStorage.setItem('GEMINI_API_KEY', key);
+    }
+
+    modalSettings?.classList.add('hidden');
+    updateApiKeyBadge();
+    const provName = AI_PROVIDERS[prov]?.name || prov;
+    showToast(prov === 'local' ? 'Motor RAG Local Activado.' : `✓ ${provName} activado como motor jurídico principal.`);
+  });
+
+  // Botón restablecer
+  btnClear?.addEventListener('click', () => {
+    localStorage.setItem('JURISWIKI_AI_PROVIDER', 'local');
+    if (providerSelect) providerSelect.value = 'local';
+    updateModalFieldsForProvider('local');
+    updateApiKeyBadge();
+    showToast('Configuración restablecida a Motor Local RAG.');
+  });
+}
+
+function updateModalFieldsForProvider(provKey) {
+  const provConfig = AI_PROVIDERS[provKey] || AI_PROVIDERS.gemini;
+  const apiKeyInput = document.getElementById('ai-api-key-input');
+  const modelSelect = document.getElementById('ai-model-select');
+  const lblApiKey = document.getElementById('lbl-api-key');
+  const linkGetApiKey = document.getElementById('link-get-api-key');
+  const providerFields = document.getElementById('provider-config-fields');
+  const localNotice = document.getElementById('local-engine-notice');
+
+  if (provKey === 'local') {
+    providerFields?.classList.add('hidden');
+    localNotice?.classList.remove('hidden');
+    return;
+  }
+
+  providerFields?.classList.remove('hidden');
+  localNotice?.classList.add('hidden');
+
+  if (lblApiKey) lblApiKey.textContent = `Clave de API (${provConfig.name})`;
+  if (apiKeyInput) {
+    apiKeyInput.placeholder = provConfig.placeholder || 'Introduce tu clave...';
+    const savedKey = localStorage.getItem(`JURISWIKI_KEY_${provKey}`) || (provKey === 'gemini' ? localStorage.getItem('GEMINI_API_KEY') : '') || '';
+    apiKeyInput.value = savedKey;
+  }
+
+  if (linkGetApiKey) {
+    linkGetApiKey.href = provConfig.helpUrl || '#';
+    linkGetApiKey.textContent = provConfig.helpText || 'Obtener clave ↗';
+  }
+
+  if (modelSelect) {
+    const savedModel = localStorage.getItem(`JURISWIKI_MODEL_${provKey}`) || '';
+    modelSelect.innerHTML = (provConfig.models || []).map(m => `
+      <option value="${m.id}" ${m.id === savedModel ? 'selected' : ''}>${escapeHtml(m.name)}</option>
+    `).join('');
+  }
+}
+
+function loadSavedAiConfigToModal() {
+  const providerSelect = document.getElementById('ai-provider-select');
+  const activeProv = localStorage.getItem('JURISWIKI_AI_PROVIDER') || (localStorage.getItem('GEMINI_API_KEY') ? 'gemini' : 'local');
+  if (providerSelect) providerSelect.value = activeProv;
+  updateModalFieldsForProvider(activeProv);
+}
+
+async function testAiConnection(provider, model, apiKey) {
+  if (provider === 'gemini') {
+    const useModel = model || 'gemini-2.5-flash';
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${useModel}:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: 'Ping' }] }] })
+    });
+    return res.ok;
+  }
+  if (provider === 'openai') {
+    const useModel = model || 'gpt-4o-mini';
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: useModel,
+        messages: [{ role: 'user', content: 'Ping' }],
+        max_tokens: 5
+      })
+    });
+    return res.ok;
+  }
+  if (provider === 'claude') {
+    const useModel = model || 'claude-3-5-haiku-20241022';
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: useModel,
+        max_tokens: 5,
+        messages: [{ role: 'user', content: 'Ping' }]
+      })
+    });
+    return res.ok;
+  }
+  
+  // Fallback vía endpoint proxy backend
+  const proxyEndpoint = (window.location.pathname.endsWith('.php') || window.location.hostname.includes('.'))
+    ? 'api.php?action=ask_ai'
+    : '/api/ask';
+
+  const res = await fetch(proxyEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, model, apiKey, query: 'Ping', systemPrompt: 'Di OK' })
+  });
+  return res.ok;
+}
+
 function loadSavedApiKey() {
-  const key = localStorage.getItem('GEMINI_API_KEY') || '';
-  const input = document.getElementById('gemini-api-key-input');
-  if (input && key) input.value = key;
   updateApiKeyBadge();
 }
 
 function updateApiKeyBadge() {
   const badge = document.getElementById('ai-status-badge');
-  const key = localStorage.getItem('GEMINI_API_KEY');
+  const provider = localStorage.getItem('JURISWIKI_AI_PROVIDER') || (localStorage.getItem('GEMINI_API_KEY') ? 'gemini' : 'local');
+  const key = localStorage.getItem(`JURISWIKI_KEY_${provider}`) || (provider === 'gemini' ? localStorage.getItem('GEMINI_API_KEY') : '');
+  const model = localStorage.getItem(`JURISWIKI_MODEL_${provider}`) || '';
+
   if (badge) {
-    badge.textContent = (key && key.length > 10)
-      ? 'Motor: Gemini 2.5 Flash + Relatoría RAG'
-      : 'Motor: Relatoría RAG Local Activo';
+    if (provider !== 'local' && key && key.length > 5) {
+      const pName = AI_PROVIDERS[provider]?.badge || provider;
+      const mName = model ? ` (${model.split('-')[0].toUpperCase()})` : '';
+      badge.textContent = `Motor: ${pName}${mName} Activo`;
+    } else {
+      badge.textContent = 'Motor: Relatoría RAG Local Activo';
+    }
   }
 }
 

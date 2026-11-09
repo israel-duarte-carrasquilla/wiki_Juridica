@@ -3,7 +3,7 @@
  * JurisWiki Colombia - API Backend para cPanel (PHP 7.4 / 8.x)
  * Endpoints:
  *   ?action=search&q=termino
- *   ?action=ask (POST con query y apiKey opcional)
+ *   ?action=ask (POST con query, provider, model, apiKey)
  *   ?action=stats
  *   ?action=sync
  */
@@ -11,7 +11,7 @@
 header('Content-Type: application/json; charset=UTF-8');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, x-api-key, anthropic-version');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
@@ -114,51 +114,203 @@ if ($action === 'search') {
     exit;
 }
 
-if ($action === 'ask') {
+if ($action === 'ask' || $action === 'ask_ai') {
     $input = json_decode(file_get_contents('php://input'), true);
-    $query = trim($input['query'] ?? '');
+    $provider = strtolower(trim($input['provider'] ?? 'gemini'));
+    $model = trim($input['model'] ?? '');
     $userApiKey = trim($input['apiKey'] ?? '');
-    
-    $serverKey = getenv('GEMINI_API_KEY');
-    $apiKey = $userApiKey ?: $serverKey;
+    $query = trim($input['query'] ?? '');
+    $systemPrompt = trim($input['systemPrompt'] ?? '');
+    $context = trim($input['context'] ?? '');
 
+    $apiKey = $userApiKey;
     if (!$apiKey) {
+        $envKeyName = strtoupper($provider) . '_API_KEY';
+        $apiKey = getenv($envKeyName) ?: getenv('GEMINI_API_KEY');
+    }
+
+    if (!$apiKey && $provider !== 'local') {
         echo json_encode([
             'status' => 'local_rag',
-            'message' => 'Sin API Key configurada. Utilice el motor RAG local integrado.'
+            'message' => 'Sin API Key configurada para ' . htmlspecialchars($provider) . '. Utilice el motor RAG local integrado.'
         ]);
         exit;
     }
 
-    $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" . urlencode($apiKey);
-
-    $payload = [
-        'contents' => [
-            [
-                'parts' => [
-                    ['text' => "Eres un asistente de jurisprudencia colombiana. Consulta: " . $query]
-                ]
-            ]
-        ]
-    ];
-
-    $ch = curl_init($endpoint);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 20);
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($httpCode >= 200 && $httpCode < 300) {
-        echo $response;
-    } else {
-        http_response_code($httpCode ?: 500);
-        echo json_encode(['error' => 'Error al contactar con Gemini API']);
+    $fullPrompt = $query;
+    if ($context) {
+        $fullPrompt = "CONTEXTO DE JURISPRUDENCIA:\n" . $context . "\n\nCONSULTA:\n" . $query;
     }
+
+    // 1. GOOGLE GEMINI
+    if ($provider === 'gemini') {
+        $geminiModel = $model ?: 'gemini-2.5-flash';
+        $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/" . urlencode($geminiModel) . ":generateContent?key=" . urlencode($apiKey);
+
+        $payload = [
+            'contents' => [
+                [
+                    'parts' => [
+                        ['text' => ($systemPrompt ? $systemPrompt . "\n\n" : "") . $fullPrompt]
+                    ]
+                ]
+            ],
+            'generationConfig' => [
+                'temperature' => 0.2,
+                'maxOutputTokens' => 1500
+            ]
+        ];
+
+        $ch = curl_init($endpoint);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpCode >= 200 && $httpCode < 300) {
+            $data = json_decode($response, true);
+            $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+            echo json_encode(['success' => true, 'provider' => 'gemini', 'model' => $geminiModel, 'text' => $text]);
+        } else {
+            http_response_code($httpCode ?: 500);
+            echo json_encode(['error' => 'Error al contactar con Google Gemini API (' . $httpCode . ')', 'details' => $response]);
+        }
+        exit;
+    }
+
+    // 2. OPENAI (CHATGPT)
+    if ($provider === 'openai') {
+        $openaiModel = $model ?: 'gpt-4o-mini';
+        $endpoint = "https://api.openai.com/v1/chat/completions";
+
+        $messages = [];
+        if ($systemPrompt) {
+            $messages[] = ['role' => 'system', 'content' => $systemPrompt];
+        }
+        $messages[] = ['role' => 'user', 'content' => $fullPrompt];
+
+        $payload = [
+            'model' => $openaiModel,
+            'messages' => $messages,
+            'temperature' => 0.2,
+            'max_tokens' => 1500
+        ];
+
+        $ch = curl_init($endpoint);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $apiKey
+        ]);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpCode >= 200 && $httpCode < 300) {
+            $data = json_decode($response, true);
+            $text = $data['choices'][0]['message']['content'] ?? '';
+            echo json_encode(['success' => true, 'provider' => 'openai', 'model' => $openaiModel, 'text' => $text]);
+        } else {
+            http_response_code($httpCode ?: 500);
+            echo json_encode(['error' => 'Error al contactar con OpenAI ChatGPT (' . $httpCode . ')', 'details' => $response]);
+        }
+        exit;
+    }
+
+    // 3. ANTHROPIC (CLAUDE)
+    if ($provider === 'claude') {
+        $claudeModel = $model ?: 'claude-3-5-haiku-20241022';
+        $endpoint = "https://api.anthropic.com/v1/messages";
+
+        $payload = [
+            'model' => $claudeModel,
+            'max_tokens' => 1500,
+            'temperature' => 0.2,
+            'messages' => [
+                ['role' => 'user', 'content' => $fullPrompt]
+            ]
+        ];
+        if ($systemPrompt) {
+            $payload['system'] = $systemPrompt;
+        }
+
+        $ch = curl_init($endpoint);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/json',
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: 2023-06-01'
+        ]);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpCode >= 200 && $httpCode < 300) {
+            $data = json_decode($response, true);
+            $text = $data['content'][0]['text'] ?? '';
+            echo json_encode(['success' => true, 'provider' => 'claude', 'model' => $claudeModel, 'text' => $text]);
+        } else {
+            http_response_code($httpCode ?: 500);
+            echo json_encode(['error' => 'Error al contactar con Anthropic Claude (' . $httpCode . ')', 'details' => $response]);
+        }
+        exit;
+    }
+
+    // 4. DEEPSEEK / OPENROUTER
+    if ($provider === 'deepseek' || $provider === 'openrouter') {
+        $isDeepseek = ($provider === 'deepseek');
+        $endpoint = $isDeepseek ? "https://api.deepseek.com/chat/completions" : "https://openrouter.ai/api/v1/chat/completions";
+        $defaultModel = $isDeepseek ? 'deepseek-chat' : 'deepseek/deepseek-chat';
+        $chosenModel = $model ?: $defaultModel;
+
+        $messages = [];
+        if ($systemPrompt) {
+            $messages[] = ['role' => 'system', 'content' => $systemPrompt];
+        }
+        $messages[] = ['role' => 'user', 'content' => $fullPrompt];
+
+        $payload = [
+            'model' => $chosenModel,
+            'messages' => $messages,
+            'temperature' => 0.2,
+            'max_tokens' => 1500
+        ];
+
+        $ch = curl_init($endpoint);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $apiKey
+        ]);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpCode >= 200 && $httpCode < 300) {
+            $data = json_decode($response, true);
+            $text = $data['choices'][0]['message']['content'] ?? '';
+            echo json_encode(['success' => true, 'provider' => $provider, 'model' => $chosenModel, 'text' => $text]);
+        } else {
+            http_response_code($httpCode ?: 500);
+            echo json_encode(['error' => 'Error al contactar con ' . $provider . ' (' . $httpCode . ')', 'details' => $response]);
+        }
+        exit;
+    }
+
+    echo json_encode(['error' => 'Proveedor de IA no reconocido']);
     exit;
 }
 
