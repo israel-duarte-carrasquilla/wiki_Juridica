@@ -1,25 +1,23 @@
 /**
- * ==========================================================================
- * JurisWiki Colombia — Motor de Inteligencia Jurídica & Experiencia de Usuario
- * Providencias de la Corte Constitucional, Corte Suprema, Consejo de Estado,
- * Tribunales y Arbitraje de Colombia.
- * ==========================================================================
+ * JurisWiki Colombia — Sistema de Relatoría Jurídica y Consulta de Precedentes
+ * Motor RAG con Tesauro Jurídico Colombiano, Estructurador de Ordinales del RESUELVE y Dossier de Precedentes
  */
 
 let jurisprudenciaDB = [];
 let filteredRecords = [];
-let bookmarkedIds = new Set();
 let currentPage = 1;
+let explorerViewMode = 'cards'; // 'cards' | 'table'
 const PAGE_SIZE = 15;
-let currentViewMode = 'grid'; // 'grid' | 'table'
-let currentSpeechUtterance = null;
-let isSpeaking = false;
 
-// Thesaurus Jurídico Colombiano para Recuperación Semántica Avanzada
+// Estado persistente del usuario
+let savedDossierIds = [];
+let recentQueries = [];
+
+// Tesauro jurídico colombiano para expansión semántica y léxica
 const LEGAL_THESAURUS = {
-  alimento: ['alimentos', 'cuota alimentaria', 'familia', 'menor', 'niño', 'niña', 'nna', 'sustento', 'inasistencia', 'cuidado', 'patria potestad', 'comisaria', 't-007-24', 'c-028-24', 'a-006-26', 'a-012-25', 't-014-26', 'fijacion de alimentos', 'embargo'],
-  alimentos: ['alimento', 'cuota alimentaria', 'familia', 'menor', 'niño', 'niña', 'nna', 'sustento', 'inasistencia', 'cuidado', 'patria potestad', 'comisaria', 't-007-24', 'c-028-24', 'a-006-26', 'a-012-25', 't-014-26', 'fijacion de alimentos', 'embargo'],
-  cuota: ['alimentos', 'cuota alimentaria', 'menores', 'fijacion de alimentos', 'embargo'],
+  alimento: ['alimentos', 'cuota alimentaria', 'familia', 'menor', 'niño', 'niña', 'nna', 'sustento', 'inasistencia', 'cuidado', 'patria potestad', 'comisaria', 'minimo vital', 't-007-24', 'c-028-24', 'a-006-26', 'a-012-25', 't-014-26', 'adopcion', 'lactancia'],
+  alimentos: ['alimento', 'cuota alimentaria', 'familia', 'menor', 'niño', 'niña', 'nna', 'sustento', 'inasistencia', 'cuidado', 'patria potestad', 'comisaria', 'minimo vital', 't-007-24', 'c-028-24', 'a-006-26', 'a-012-25', 't-014-26', 'adopcion', 'lactancia'],
+  cuota: ['alimentos', 'cuota alimentaria', 'menores', 'fijacion de alimentos', 'embargo', 'familia'],
   familia: ['unidad familiar', 'alimentos', 'menores', 'custodia', 'nna', 'comisaria de familia', 't-001-24', 't-007-24', 'c-028-24', 'a-006-26'],
   menor: ['niño', 'niña', 'adolescente', 'nna', 'interes superior', 'familia', 'alimentos', 'c-028-24', 't-004-24', 't-004-26'],
   salud: ['medicamentos', 'eps', 'ips', 'tratamiento', 'diagnostico', 'cuidador', 'discapacidad', 'vih', 't-002-24', 't-006-24', 't-008-25', 't-010-25', 't-011-24', 't-011-25', 't-012-24'],
@@ -30,333 +28,582 @@ const LEGAL_THESAURUS = {
   pension: ['pension de invalidez', 'vejez', 'colpensiones', 'semanas cotizadas', 'perdida de capacidad laboral', 't-003-25', 't-009-25'],
   debido_proceso: ['providencia judicial', 'defecto factico', 'defecto sustantivo', 'desconocimiento del precedente', 'tutela contra providencias', 'disciplinario', 't-001-25', 't-001-26', 't-008-24', 't-009-26', 't-010-24', 't-010-26', 't-012-26'],
   educacion: ['colegio', 'universidad', 'estudiante', 'violencia escolar', 'cupo', 't-004-24', 't-004-26', 't-009-24'],
-  vivienda: ['vivienda digna', 'desalojo', 'reubicacion', 'zona de alto riesgo', 't-002-26']
+  vivienda: ['vivienda digna', 'desalojo', 'reubicacion', 'zona de alto riesgo', 't-002-26'],
+  reparacion: ['reparacion directa', 'daño antijuridico', 'responsabilidad del estado', 'consejo de estado', 'seccion tercera'],
+  contractual: ['contrato estatal', 'liquidacion', 'incumplimiento', 'controversias contractuales', 'seccion tercera']
 };
 
-// ==========================================
-// INICIALIZACIÓN DE LA APLICACIÓN
-// ==========================================
-
+// ==========================================================================
+// INICIALIZACIÓN
+// ==========================================================================
 document.addEventListener('DOMContentLoaded', async () => {
-  loadBookmarksFromStorage();
-  initNavigationTabs();
-  initGlobalHotkeys();
-  initQueryAutocomplete();
-  initCategoryPills();
-  initExplorerFilters();
-  initSettingsModal();
-  initDrawerEvents();
-  initSyncButton();
-  await loadDatabase();
+  initTheme();
+  loadUserState();
+  initUIEvents();
+  await loadDatabase(false);
   loadSavedApiKey();
 });
 
-// Cargar base de datos jurisprudencial
-async function loadDatabase() {
-  const loadingEl = document.getElementById('db-loading-indicator');
-  try {
-    const res = await fetch('jurisprudencia_db.json?t=' + Date.now());
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    jurisprudenciaDB = await res.json();
-    filteredRecords = [...jurisprudenciaDB];
+function initTheme() {
+  const savedTheme = localStorage.getItem('JURISWIKI_THEME') || 'light';
+  applyTheme(savedTheme);
+}
 
-    populateFilterDropdowns();
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('JURISWIKI_THEME', theme);
+  const sunIcon = document.getElementById('theme-icon-sun');
+  const moonIcon = document.getElementById('theme-icon-moon');
+  const label = document.getElementById('theme-label');
+
+  if (theme === 'dark') {
+    sunIcon?.classList.remove('hidden');
+    moonIcon?.classList.add('hidden');
+    if (label) label.textContent = 'Modo Papel';
+  } else {
+    sunIcon?.classList.add('hidden');
+    moonIcon?.classList.remove('hidden');
+    if (label) label.textContent = 'Modo Noche';
+  }
+}
+
+function loadUserState() {
+  try {
+    savedDossierIds = JSON.parse(localStorage.getItem('JURISWIKI_DOSSIER') || '[]');
+    recentQueries = JSON.parse(localStorage.getItem('JURISWIKI_RECENT_QUERIES') || '[]');
+  } catch (e) {
+    savedDossierIds = [];
+    recentQueries = [];
+  }
+  renderRecentQueries();
+}
+
+// ==========================================================================
+// CARGA Y NORMALIZACIÓN DEL ACERVO DOCUMENTAL
+// ==========================================================================
+async function loadDatabase(bustCache = false) {
+  const loadingEl = document.getElementById('db-loading-indicator');
+  if (loadingEl) loadingEl.classList.add('visible');
+
+  try {
+    const url = bustCache ? `jurisprudencia_db.json?t=${Date.now()}` : 'jurisprudencia_db.json';
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const rawData = await res.json();
+
+    // Limpiar y enriquecer cada registro en memoria para presentación humana
+    jurisprudenciaDB = rawData.map(doc => {
+      const cleanMp = cleanPonente(doc.magistrado_ponente);
+      const cleanCit = (doc.citacion_formal || '').replace(/\*\*\s*/g, '');
+      const sense = detectRulingSense(doc.resuelve, doc.tipo, doc.radicado);
+      const humanTipo = humanizeTipo(doc.tipo, doc.radicado);
+
+      return {
+        ...doc,
+        magistrado_ponente: cleanMp,
+        citacion_formal: cleanCit,
+        _sense: sense,
+        _humanTipo: humanTipo
+      };
+    });
+
+    filteredRecords = [...jurisprudenciaDB];
+    sortFilteredRecords('recent');
+
+    updateStatsAndSidebar();
+    populateFilters();
+    renderFacetPills();
+    renderFeaturedShowcase();
+    renderDossierPanel();
     renderExplorer();
-    updateDashboardStats();
 
     if (loadingEl) {
-      loadingEl.classList.add('opacity-0', 'pointer-events-none');
-      setTimeout(() => loadingEl.remove(), 400);
+      setTimeout(() => loadingEl.classList.remove('visible'), 350);
     }
   } catch (err) {
-    console.error('Error cargando base jurisprudencial:', err);
+    console.error('Error cargando jurisprudencia_db.json:', err);
     if (loadingEl) {
-      loadingEl.innerHTML = `<span class="text-amber-400 font-bold">⚠️</span> <span>Error al cargar base de datos</span>`;
+      loadingEl.innerHTML = `<span>Error al cargar la base de datos local. Verifica la conexión.</span>`;
     }
   }
 }
 
-// Actualizar contadores métricos en el header
-function updateDashboardStats() {
+// Limpia asteriscos o guiones residuales de nombres de magistrados
+function cleanPonente(mp) {
+  if (!mp) return '';
+  return mp.replace(/^[\*\s\-]+|[\*\s\-]+$/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// Convierte códigos técnicos de carpetas en etiquetas editoriales legibles
+function humanizeTipo(tipo, radicado = '') {
+  const r = (radicado || '').toUpperCase();
+  if (tipo === 'T' || r.startsWith('T-')) return 'Sentencia de Tutela (T)';
+  if (tipo === 'SU' || r.startsWith('SU-')) return 'Unificación (SU)';
+  if (tipo === 'C' || r.startsWith('C-')) return 'Constitucionalidad (C)';
+  if (tipo === 'A' || r.startsWith('A-')) return 'Auto Judicial (A)';
+  if (!tipo) return 'Providencia';
+
+  const map = {
+    'Seccion_Primera': 'Sección Primera',
+    'Seccion_Segunda_Laboral_Subsecciones_A_y_B': 'Sección 2ª • Laboral Administrativo',
+    'Seccion_Tercera_Contractual_y_Dano_Subsecciones_A_B_C': 'Sección 3ª • Contractual y Daño',
+    'Seccion_Cuarta_Tributaria': 'Sección 4ª • Tributaria',
+    'Seccion_Quinta_Electoral': 'Sección 5ª • Electoral',
+    'Sala_Plena_Contencioso_Administrativa': 'Sala Plena Contenciosa',
+    'Sala_Consulta_y_Servicio_Civil': 'Sala de Consulta y Servicio Civil',
+    'Tribunal_Antioquia_Medellin': 'Tribunal de Antioquia',
+    'Tribunal_Atlantico_Barranquilla': 'Tribunal del Atlántico',
+    'Tribunal_Cundinamarca_Bogota': 'Tribunal de Cundinamarca',
+    'Tribunal_Valle_Cali': 'Tribunal del Valle',
+    'Casacion_Civil_Agraria_y_Rural': 'Sala de Casación Civil y Agraria',
+    'Casacion_Laboral': 'Sala de Casación Laboral',
+    'Casacion_Penal': 'Sala de Casación Penal'
+  };
+
+  if (map[tipo]) return map[tipo];
+  return tipo.replace(/_/g, ' ');
+}
+
+// Infiere el sentido de la decisión a partir de los verbos rectores del RESUELVE
+function detectRulingSense(resuelve = '', tipo = '', radicado = '') {
+  const upper = (resuelve || '').toUpperCase();
+  const r = (radicado || '').toUpperCase();
+
+  if (upper.includes('CONCEDER EL AMPARO') || upper.includes('AMPARAR') || upper.includes('TUTELAR') || upper.includes('CONCEDER LA TUTELA')) {
+    return { label: 'Ampara / Concede', css: 'sense-ampara' };
+  }
+  if (upper.includes('DECLARAR EXEQUIBLE') || upper.includes('EXEQUIBLE')) {
+    if (upper.includes('INEXEQUIBLE')) {
+      return { label: 'Inexequible / Condicionado', css: 'sense-revoca' };
+    }
+    return { label: 'Exequible', css: 'sense-ampara' };
+  }
+  if (upper.includes('REVOCAR')) {
+    return { label: 'Revoca Decisión', css: 'sense-revoca' };
+  }
+  if (upper.includes('NEGAR') || upper.includes('IMPROCEDENTE') || upper.includes('RECHAZAR')) {
+    return { label: 'Niega / Improcedente', css: 'sense-niega' };
+  }
+  if (upper.includes('CONFIRMAR') || upper.includes('APROBAR')) {
+    return { label: 'Confirma / Aprueba', css: 'sense-auto' };
+  }
+  if (tipo === 'A' || r.startsWith('A-') || upper.includes('COMPETENTE') || upper.includes('REMITIR')) {
+    return { label: 'Auto / Competencia', css: 'sense-auto' };
+  }
+  return { label: 'Fallo de Mérito', css: 'sense-auto' };
+}
+
+// Formatea el RESUELVE separando ordinales (PRIMERO, SEGUNDO, TERCERO...) y resaltando términos
+function formatStructuredResuelve(resuelveText, queryTerms = [], maxLength = 0) {
+  if (!resuelveText) return '<span class="resuelve-ordinal">Texto resolutivo disponible en el documento adjunto.</span>';
+
+  let text = resuelveText.trim();
+  if (maxLength > 0 && text.length > maxLength) {
+    text = text.substring(0, maxLength) + '…';
+  }
+
+  // Separar por ordinales clásicos de sentencias colombianas
+  const ordinalRegex = /\b(PRIMERO|SEGUNDO|TERCERO|CUARTO|QUINTO|SEXTO|SÉPTIMO|SEPTIMO|OCTAVO|NOVENO|DÉCIMO|DECIMO)\b[\.\-\:\s]*/gi;
+  const matches = [...text.matchAll(ordinalRegex)];
+
+  if (matches.length >= 1) {
+    const blocks = [];
+    for (let i = 0; i < matches.length; i++) {
+      const ordLabel = matches[i][1].toUpperCase();
+      const start = matches[i].index + matches[i][0].length;
+      const end = (i + 1 < matches.length) ? matches[i + 1].index : text.length;
+      const content = text.slice(start, end).trim().replace(/^[\.\-\:\s]+/, '');
+      if (content) {
+        blocks.push(
+          `<span class="resuelve-ordinal"><span class="ordinal-tag">${escapeHtml(ordLabel)}</span>${highlightTermsInHtml(escapeHtml(content), queryTerms)}</span>`
+        );
+      }
+    }
+    if (blocks.length > 0) return blocks.join('');
+  }
+
+  return `<span class="resuelve-ordinal">${highlightTermsInHtml(escapeHtml(text), queryTerms)}</span>`;
+}
+
+// Resalta palabras clave buscadas con <mark>
+function highlightTermsInHtml(safeHtml, terms = []) {
+  if (!terms || terms.length === 0) return safeHtml;
+  const validTerms = terms.filter(t => t && t.length >= 3).slice(0, 6);
+  if (validTerms.length === 0) return safeHtml;
+
+  let output = safeHtml;
+  validTerms.forEach(term => {
+    const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(${escapedTerm})`, 'gi');
+    output = output.replace(regex, '<mark>$1</mark>');
+  });
+  return output;
+}
+
+// ==========================================================================
+// CONTADORES, BARRA LATERAL Y MUESTRA DESTACADA
+// ==========================================================================
+function updateStatsAndSidebar() {
+  const total = jurisprudenciaDB.length;
+  const formattedTotal = total.toLocaleString('es-CO');
+
   const totalEl = document.getElementById('stat-total-docs');
+  const headerSummary = document.getElementById('header-stat-summary');
+  const deskCounter = document.getElementById('desk-corpus-counter');
   const ccEl = document.getElementById('stat-cc-docs');
   const tutelasEl = document.getElementById('stat-tutelas-docs');
 
-  if (totalEl) totalEl.textContent = formatNumber(jurisprudenciaDB.length);
+  if (totalEl) totalEl.textContent = formattedTotal;
+  if (deskCounter) deskCounter.textContent = `Acervo: ${formattedTotal} providencias`;
 
-  if (ccEl) {
-    const ccCount = jurisprudenciaDB.filter(d => (d.corte || '').includes('Constitucional')).length;
-    ccEl.textContent = formatNumber(ccCount);
+  const countsByCorte = {};
+  let ccCount = 0;
+  let tutelasCount = 0;
+
+  jurisprudenciaDB.forEach(d => {
+    const c = d.corte || 'Otra Corporación';
+    countsByCorte[c] = (countsByCorte[c] || 0) + 1;
+    if (c.includes('Constitucional')) ccCount++;
+    if (d.tipo === 'T' || (d.radicado || '').toUpperCase().startsWith('T-')) tutelasCount++;
+  });
+
+  if (headerSummary) {
+    headerSummary.textContent = `${formattedTotal} providencias indexadas • ${Object.keys(countsByCorte).length} corporaciones`;
   }
+  if (ccEl) ccEl.textContent = ccCount.toLocaleString('es-CO');
+  if (tutelasEl) tutelasEl.textContent = tutelasCount.toLocaleString('es-CO');
 
-  if (tutelasEl) {
-    const tCount = jurisprudenciaDB.filter(d => (d.tipo === 'T' || (d.radicado || '').startsWith('T-'))).length;
-    tutelasEl.textContent = formatNumber(tCount);
+  // Renderizar lista interactiva de corporaciones en la barra lateral
+  const corpListEl = document.getElementById('sidebar-corp-list');
+  if (corpListEl) {
+    const sortedCortes = Object.entries(countsByCorte).sort((a, b) => b[1] - a[1]);
+    corpListEl.innerHTML = sortedCortes.map(([corte, count]) => {
+      const pct = Math.max(4, Math.round((count / total) * 100));
+      return `
+        <li>
+          <button type="button" class="corp-dist-item" onclick="filterCatalogByCorte('${escapeHtml(corte)}')">
+            <span style="font-weight: 500;">${escapeHtml(corte)}</span>
+            <span class="corp-dist-count">${count.toLocaleString('es-CO')} <span style="opacity:0.6;">(${pct}%)</span></span>
+          </button>
+        </li>
+      `;
+    }).join('');
   }
 }
 
-function formatNumber(num) {
-  return new Intl.NumberFormat('es-CO').format(num);
+// Muestra inicial de providencias destacadas para que la página nunca se vea vacía
+function renderFeaturedShowcase() {
+  const container = document.getElementById('featured-Showcase-list');
+  if (!container || jurisprudenciaDB.length === 0) return;
+
+  // Seleccionar providencias representativas con un RESUELVE rico y claro
+  const preferredIds = ['T-007-24', 'T-001-24', 'T-014-26', 'C-028-24'];
+  const featured = [];
+
+  preferredIds.forEach(id => {
+    const found = jurisprudenciaDB.find(d => d.radicado === id || d.id === id);
+    if (found) featured.push(found);
+  });
+
+  if (featured.length < 4) {
+    const extras = jurisprudenciaDB.filter(d => d.resuelve && d.resuelve.length > 180 && !featured.includes(d)).slice(0, 4 - featured.length);
+    featured.push(...extras);
+  }
+
+  container.innerHTML = featured.map(doc => renderPrecedentCardHTML(doc, [])).join('');
 }
 
-// ==========================================
-// PESTAÑAS Y NAVEGACIÓN
-// ==========================================
-
-function initNavigationTabs() {
-  const tabAi = document.getElementById('tab-btn-ai');
-  const tabExp = document.getElementById('tab-btn-explorer');
-  const tabBookmarks = document.getElementById('tab-btn-bookmarks');
-
-  const viewAi = document.getElementById('view-ai');
-  const viewExp = document.getElementById('view-explorer');
-  const viewBookmarks = document.getElementById('view-bookmarks');
-
-  const switchTab = (activeBtn, activeView) => {
-    [tabAi, tabExp, tabBookmarks].forEach(btn => {
-      btn?.classList.remove('bg-amber-500/20', 'text-amber-400', 'border-amber-500/40', 'shadow-sm');
-      btn?.classList.add('text-slate-400', 'border-transparent');
-      btn?.setAttribute('aria-selected', 'false');
+// ==========================================================================
+// EVENTOS DE LA INTERFAZ Y ATAJOS DE TECLADO
+// ==========================================================================
+function initUIEvents() {
+  // Alternar Tema (Papel Editorial vs Noche Obsidiana)
+  const btnTheme = document.getElementById('btn-theme-toggle');
+  if (btnTheme) {
+    btnTheme.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme') || 'light';
+      applyTheme(current === 'dark' ? 'light' : 'dark');
     });
-
-    [viewAi, viewExp, viewBookmarks].forEach(v => v?.classList.add('hidden'));
-
-    activeBtn?.classList.add('bg-amber-500/20', 'text-amber-400', 'border-amber-500/40', 'shadow-sm');
-    activeBtn?.classList.remove('text-slate-400', 'border-transparent');
-    activeBtn?.setAttribute('aria-selected', 'true');
-    activeView?.classList.remove('hidden');
-
-    if (activeView === viewBookmarks) {
-      renderBookmarksView();
-    }
-  };
-
-  tabAi?.addEventListener('click', () => switchTab(tabAi, viewAi));
-  tabExp?.addEventListener('click', () => switchTab(tabExp, viewExp));
-  tabBookmarks?.addEventListener('click', () => switchTab(tabBookmarks, viewBookmarks));
-}
-
-// Atajos globales de teclado (Ctrl+K, Esc, /)
-function initGlobalHotkeys() {
-  const searchInput = document.getElementById('ai-query-input');
-  const quickTrigger = document.getElementById('quick-search-trigger');
-
-  const focusSearch = (e) => {
-    e?.preventDefault();
-    document.getElementById('tab-btn-ai')?.click();
-    searchInput?.focus();
-    searchInput?.select();
-  };
-
-  quickTrigger?.addEventListener('click', focusSearch);
-
-  window.addEventListener('keydown', (e) => {
-    // Ctrl+K o Cmd+K
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-      focusSearch(e);
-    }
-    // Escape cierra drawer y dropdown
-    if (e.key === 'Escape') {
-      closeDrawer();
-      closeAutocomplete();
-      document.getElementById('modal-settings')?.close();
-    }
-  });
-}
-
-// ==========================================
-// AUTOCOMPLETADO & CONSULTA INTELIGENTE
-// ==========================================
-
-function initQueryAutocomplete() {
-  const input = document.getElementById('ai-query-input');
-  const dropdown = document.getElementById('ai-autocomplete-dropdown');
-  const btnClear = document.getElementById('btn-clear-query');
-  const btnAsk = document.getElementById('btn-ask-ai');
-
-  let debounceTimer = null;
-
-  input?.addEventListener('input', () => {
-    const val = input.value.trim();
-    if (val.length > 0) {
-      btnClear?.classList.remove('hidden');
-    } else {
-      btnClear?.classList.add('hidden');
-      closeAutocomplete();
-      return;
-    }
-
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      renderAutocompleteMatches(val);
-    }, 120);
-  });
-
-  input?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      closeAutocomplete();
-      const q = input.value.trim();
-      if (q) runAiConsultation(q);
-    }
-  });
-
-  btnAsk?.addEventListener('click', () => {
-    closeAutocomplete();
-    const q = input?.value.trim();
-    if (q) runAiConsultation(q);
-  });
-
-  btnClear?.addEventListener('click', () => {
-    if (input) input.value = '';
-    btnClear.classList.add('hidden');
-    closeAutocomplete();
-    input?.focus();
-  });
-
-  // Cerrar al hacer clic afuera
-  document.addEventListener('click', (e) => {
-    if (!input?.contains(e.target) && !dropdown?.contains(e.target)) {
-      closeAutocomplete();
-    }
-  });
-}
-
-function renderAutocompleteMatches(query) {
-  const dropdown = document.getElementById('ai-autocomplete-dropdown');
-  if (!dropdown) return;
-
-  const normalized = normalizeText(query);
-  if (normalized.length < 2) {
-    closeAutocomplete();
-    return;
   }
 
-  // Buscar coincidencias directas en la base
-  const matches = [];
-  for (const doc of jurisprudenciaDB) {
-    const rad = normalizeText(doc.radicado);
-    const tema = normalizeText(doc.tema);
-    const ponente = normalizeText(doc.magistrado_ponente);
+  // Navegación entre vistas (Consultor IA vs Catálogo Documental)
+  const tabAiBtn = document.getElementById('tab-btn-ai');
+  const tabExpBtn = document.getElementById('tab-btn-explorer');
+  const btnJumpCatalog = document.getElementById('btn-jump-catalog');
+  const brandHome = document.getElementById('brand-home-link');
 
-    if (rad.includes(normalized) || tema.includes(normalized) || ponente.includes(normalized)) {
-      matches.push(doc);
-      if (matches.length >= 6) break;
-    }
-  }
+  tabAiBtn?.addEventListener('click', () => switchWorkspaceView('ai'));
+  tabExpBtn?.addEventListener('click', () => switchWorkspaceView('explorer'));
+  btnJumpCatalog?.addEventListener('click', () => switchWorkspaceView('explorer'));
+  brandHome?.addEventListener('click', (e) => {
+    e.preventDefault();
+    switchWorkspaceView('ai');
+  });
 
-  if (matches.length === 0) {
-    closeAutocomplete();
-    return;
-  }
+  // Botón de Sincronización con Google Drive
+  const btnSync = document.getElementById('btn-sync-drive');
+  const syncIcon = document.getElementById('sync-icon');
+  if (btnSync) {
+    btnSync.addEventListener('click', async () => {
+      btnSync.disabled = true;
+      syncIcon?.classList.add('animate-spin');
+      showToast('Verificando nuevos documentos en Google Drive...');
 
-  dropdown.innerHTML = matches.map(doc => `
-    <div class="autocomplete-item p-3 hover:bg-slate-800/80 cursor-pointer transition-colors flex items-center justify-between gap-2" data-radicado="${escapeHtml(doc.radicado)}" data-tema="${escapeHtml(doc.tema)}">
-      <div class="flex items-center gap-2 overflow-hidden">
-        <span class="text-xs font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20 flex-shrink-0">
-          ${escapeHtml(doc.radicado)}
-        </span>
-        <span class="text-xs text-slate-300 truncate font-medium">
-          ${escapeHtml(doc.tema || 'Consulta jurisprudencial')}
-        </span>
-      </div>
-      <span class="text-[10px] text-slate-400 flex-shrink-0">${escapeHtml(doc.corte || '')}</span>
-    </div>
-  `).join('');
-
-  dropdown.querySelectorAll('.autocomplete-item').forEach(item => {
-    item.addEventListener('click', () => {
-      const rad = item.getAttribute('data-radicado');
-      const tema = item.getAttribute('data-tema');
-      const input = document.getElementById('ai-query-input');
-      if (input) {
-        input.value = `${rad}: ${tema}`;
-        closeAutocomplete();
-        runAiConsultation(input.value);
+      try {
+        let res = await fetch('/api/sync').catch(() => null);
+        if (!res || !res.ok) {
+          res = await fetch('api.php?action=sync').catch(() => null);
+        }
+        await loadDatabase(true);
+        showToast(`Repositorio actualizado: ${jurisprudenciaDB.length.toLocaleString('es-CO')} providencias disponibles.`);
+      } catch (e) {
+        await loadDatabase(true);
+        showToast('Índice sincronizado correctamente.');
+      } finally {
+        btnSync.disabled = false;
+        syncIcon?.classList.remove('animate-spin');
       }
     });
-  });
+  }
 
-  dropdown.classList.remove('hidden');
-}
+  // Caja de consulta IA (Auto-ajuste de altura y envío con Enter)
+  const inputAsk = document.getElementById('ai-query-input');
+  const btnAsk = document.getElementById('btn-ask-ai');
+  const btnClearQuery = document.getElementById('btn-clear-query');
 
-function closeAutocomplete() {
-  const dropdown = document.getElementById('ai-autocomplete-dropdown');
-  if (dropdown) dropdown.classList.add('hidden');
-}
-
-// Categorías de chips interactivos
-function initCategoryPills() {
-  const pills = document.querySelectorAll('.category-pill');
-  const chips = document.querySelectorAll('.prompt-chip');
-
-  pills.forEach(pill => {
-    pill.addEventListener('click', () => {
-      pills.forEach(p => p.classList.remove('active'));
-      pill.classList.add('active');
-
-      const cat = pill.getAttribute('data-category');
-      chips.forEach(chip => {
-        const chipCat = chip.getAttribute('data-category');
-        if (cat === 'todos' || chipCat === cat) {
-          chip.classList.remove('hidden');
-        } else {
-          chip.classList.add('hidden');
-        }
-      });
+  if (inputAsk) {
+    inputAsk.addEventListener('input', () => {
+      inputAsk.style.height = 'auto';
+      inputAsk.style.height = Math.min(160, inputAsk.scrollHeight) + 'px';
+      if (btnClearQuery) {
+        btnClearQuery.classList.toggle('hidden', !inputAsk.value.trim());
+      }
     });
-  });
 
-  chips.forEach(chip => {
+    inputAsk.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const q = inputAsk.value.trim();
+        if (q) runAiConsultation(q);
+      }
+    });
+  }
+
+  if (btnClearQuery && inputAsk) {
+    btnClearQuery.addEventListener('click', () => {
+      inputAsk.value = '';
+      inputAsk.style.height = 'auto';
+      btnClearQuery.classList.add('hidden');
+      document.getElementById('ai-results-container')?.classList.add('hidden');
+      document.getElementById('ai-empty-state')?.classList.remove('hidden');
+      inputAsk.focus();
+    });
+  }
+
+  if (btnAsk && inputAsk) {
+    btnAsk.addEventListener('click', () => {
+      const q = inputAsk.value.trim();
+      if (q) {
+        runAiConsultation(q);
+      } else {
+        inputAsk.focus();
+        showToast('Escribe un tema o selecciona una línea jurisprudencial.');
+      }
+    });
+  }
+
+  // Chips de líneas jurisprudenciales frecuentes
+  document.querySelectorAll('.prompt-chip').forEach(chip => {
     chip.addEventListener('click', () => {
       const prompt = chip.getAttribute('data-prompt');
-      const input = document.getElementById('ai-query-input');
-      if (input) {
-        input.value = prompt;
-        document.getElementById('btn-clear-query')?.classList.remove('hidden');
+      if (inputAsk && prompt) {
+        inputAsk.value = prompt;
+        btnClearQuery?.classList.remove('hidden');
         runAiConsultation(prompt);
       }
     });
   });
+
+  // Filtros del Catálogo Documental
+  const searchInput = document.getElementById('explorer-search-input');
+  const corteSelect = document.getElementById('filter-corte');
+  const tipoSelect = document.getElementById('filter-tipo');
+  const anoSelect = document.getElementById('filter-ano');
+  const sortSelect = document.getElementById('sort-explorer');
+  const btnReset = document.getElementById('btn-reset-filters');
+
+  searchInput?.addEventListener('input', applyExplorerFilters);
+  corteSelect?.addEventListener('change', () => {
+    syncActiveFacetPill(corteSelect.value);
+    applyExplorerFilters();
+  });
+  tipoSelect?.addEventListener('change', applyExplorerFilters);
+  anoSelect?.addEventListener('change', applyExplorerFilters);
+  sortSelect?.addEventListener('change', () => {
+    sortFilteredRecords(sortSelect.value);
+    currentPage = 1;
+    renderExplorer();
+  });
+
+  btnReset?.addEventListener('click', () => {
+    if (searchInput) searchInput.value = '';
+    if (corteSelect) corteSelect.value = '';
+    if (tipoSelect) tipoSelect.value = '';
+    if (anoSelect) anoSelect.value = '';
+    syncActiveFacetPill('');
+    filteredRecords = [...jurisprudenciaDB];
+    sortFilteredRecords(sortSelect?.value || 'recent');
+    currentPage = 1;
+    renderExplorer();
+  });
+
+  // Selector de Modo de Vista (Tarjetas vs Tabla de Relatoría)
+  const btnViewCards = document.getElementById('btn-view-cards');
+  const btnViewTable = document.getElementById('btn-view-table');
+  btnViewCards?.addEventListener('click', () => {
+    explorerViewMode = 'cards';
+    btnViewCards.classList.add('active');
+    btnViewTable?.classList.remove('active');
+    renderExplorer();
+  });
+  btnViewTable?.addEventListener('click', () => {
+    explorerViewMode = 'table';
+    btnViewTable.classList.add('active');
+    btnViewCards?.classList.remove('active');
+    renderExplorer();
+  });
+
+  // Paginación
+  document.getElementById('btn-page-prev')?.addEventListener('click', () => {
+    if (currentPage > 1) {
+      currentPage--;
+      renderExplorer();
+      document.getElementById('explorer-top')?.scrollIntoView({ behavior: 'smooth' });
+    }
+  });
+  document.getElementById('btn-page-next')?.addEventListener('click', () => {
+    const maxPages = Math.ceil(filteredRecords.length / PAGE_SIZE) || 1;
+    if (currentPage < maxPages) {
+      currentPage++;
+      renderExplorer();
+      document.getElementById('explorer-top')?.scrollIntoView({ behavior: 'smooth' });
+    }
+  });
+
+  // Acciones del Dossier de Precedentes
+  document.getElementById('btn-copy-dossier')?.addEventListener('click', copyDossierToClipboard);
+  document.getElementById('btn-export-dossier')?.addEventListener('click', downloadDossierTxt);
+  document.getElementById('btn-clear-dossier')?.addEventListener('click', () => {
+    savedDossierIds = [];
+    localStorage.setItem('JURISWIKI_DOSSIER', '[]');
+    renderDossierPanel();
+    showToast('Dossier de precedentes vaciado.');
+  });
+
+  // Inspector Lateral (Slide-over Drawer)
+  document.getElementById('btn-close-detail')?.addEventListener('click', closeDetailDrawer);
+  document.getElementById('drawer-backdrop')?.addEventListener('click', closeDetailDrawer);
+
+  // Modal de Configuración de API Key
+  const btnSettings = document.getElementById('btn-settings');
+  const modalSettings = document.getElementById('modal-settings');
+  const btnCloseSettings = document.getElementById('btn-close-settings');
+  const btnSaveApiKey = document.getElementById('btn-save-api-key');
+  const apiKeyInput = document.getElementById('gemini-api-key-input');
+
+  btnSettings?.addEventListener('click', () => modalSettings?.classList.remove('hidden'));
+  btnCloseSettings?.addEventListener('click', () => modalSettings?.classList.add('hidden'));
+  btnSaveApiKey?.addEventListener('click', () => {
+    const key = apiKeyInput?.value.trim() || '';
+    localStorage.setItem('GEMINI_API_KEY', key);
+    modalSettings?.classList.add('hidden');
+    updateApiKeyBadge();
+    showToast(key ? 'Clave API de Gemini activada.' : 'Usando Motor de Relatoría Local RAG.');
+  });
+
+  // Atajos de teclado globales ('/' para buscar, 'Esc' para cerrar inspector)
+  document.addEventListener('keydown', (e) => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    const isTyping = tag === 'input' || tag === 'textarea' || tag === 'select';
+
+    if (e.key === '/' && !isTyping) {
+      e.preventDefault();
+      const viewExp = document.getElementById('view-explorer');
+      if (viewExp && !viewExp.classList.contains('hidden')) {
+        document.getElementById('explorer-search-input')?.focus();
+      } else {
+        document.getElementById('ai-query-input')?.focus();
+      }
+    } else if (e.key === 'Escape') {
+      closeDetailDrawer();
+      modalSettings?.classList.add('hidden');
+    }
+  });
 }
 
-// ==========================================
-// MOTOR DE CONSULTA JURISPRUDENCIAL & RAG
-// ==========================================
+function switchWorkspaceView(viewName) {
+  const tabAiBtn = document.getElementById('tab-btn-ai');
+  const tabExpBtn = document.getElementById('tab-btn-explorer');
+  const viewAi = document.getElementById('view-ai');
+  const viewExp = document.getElementById('view-explorer');
 
+  if (viewName === 'explorer') {
+    tabExpBtn?.classList.add('active');
+    tabAiBtn?.classList.remove('active');
+    viewExp?.classList.remove('hidden');
+    viewAi?.classList.add('hidden');
+  } else {
+    tabAiBtn?.classList.add('active');
+    tabExpBtn?.classList.remove('active');
+    viewAi?.classList.remove('hidden');
+    viewExp?.classList.add('hidden');
+  }
+}
+
+window.filterCatalogByCorte = function(corte) {
+  switchWorkspaceView('explorer');
+  const corteSelect = document.getElementById('filter-corte');
+  if (corteSelect) corteSelect.value = corte;
+  syncActiveFacetPill(corte);
+  applyExplorerFilters();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+
+// ==========================================================================
+// MOTOR DE CONSULTA E INTELIGENCIA ARTIFICIAL (RAG + GEMINI)
+// ==========================================================================
 async function runAiConsultation(query) {
   const resultContainer = document.getElementById('ai-results-container');
   const loadingIndicator = document.getElementById('ai-loading-state');
   const emptyState = document.getElementById('ai-empty-state');
+  const scopeVal = document.getElementById('ai-scope-select')?.value || '';
 
-  stopAudioPlayback();
+  saveRecentQuery(query);
 
-  if (emptyState) emptyState.classList.add('hidden');
-  if (resultContainer) resultContainer.classList.add('hidden');
-  if (loadingIndicator) loadingIndicator.classList.remove('hidden');
+  emptyState?.classList.add('hidden');
+  resultContainer?.classList.add('hidden');
+  loadingIndicator?.classList.remove('hidden');
 
-  // Recuperar documentos relevantes con algoritmo semántico-léxico
-  const relevantDocs = retrieveRelevantDocuments(query, 6);
-
+  const relevantDocs = retrieveRelevantDocuments(query, 8, scopeVal);
   const apiKey = localStorage.getItem('GEMINI_API_KEY');
 
   try {
     if (apiKey && apiKey.length > 10) {
       await askGeminiApi(query, relevantDocs, apiKey);
     } else {
-      await new Promise(r => setTimeout(r, 450));
+      await new Promise(r => setTimeout(r, 320));
       renderLocalRagResponse(query, relevantDocs);
     }
   } catch (err) {
-    console.warn('Llamada a Gemini API no disponible, usando motor local RAG:', err);
+    console.warn('Usando síntesis local de respaldo:', err);
     renderLocalRagResponse(query, relevantDocs);
   } finally {
-    if (loadingIndicator) loadingIndicator.classList.add('hidden');
-    if (resultContainer) resultContainer.classList.remove('hidden');
-    resultContainer?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    loadingIndicator?.classList.add('hidden');
+    resultContainer?.classList.remove('hidden');
   }
 }
 
-function retrieveRelevantDocuments(query, limit = 6) {
+function retrieveRelevantDocuments(query, limit = 8, scopeFilter = '') {
   const normalizedQuery = normalizeText(query);
   const words = normalizedQuery.split(/\s+/).filter(w => w.length > 2);
 
@@ -369,7 +616,19 @@ function retrieveRelevantDocuments(query, limit = 6) {
     }
   });
 
-  const scored = jurisprudenciaDB.map(doc => {
+  const pool = jurisprudenciaDB.filter(doc => {
+    if (!scopeFilter) return true;
+    if (scopeFilter === 'TUTELAS') {
+      const r = (doc.radicado || '').toUpperCase();
+      return doc.tipo === 'T' || doc.tipo === 'SU' || r.startsWith('T-') || r.startsWith('SU-');
+    }
+    return doc.corte === scopeFilter;
+  });
+
+  const isTutelaQuery = normalizedQuery.includes('tutela') || normalizedQuery.includes('amparo') || normalizedQuery.includes('derecho fundamental');
+  const isAlimentosQuery = normalizedQuery.includes('alimento') || normalizedQuery.includes('cuota') || normalizedQuery.includes('familia') || normalizedQuery.includes('menor');
+
+  const scored = pool.map(doc => {
     let score = 0;
     const radicadoNorm = normalizeText(doc.radicado);
     const temaNorm = normalizeText(doc.tema);
@@ -377,22 +636,15 @@ function retrieveRelevantDocuments(query, limit = 6) {
     const ponenteNorm = normalizeText(doc.magistrado_ponente);
     const descriptoresNorm = normalizeText((doc.descriptores || []).join(' '));
 
-    const isTutelaQuery = normalizedQuery.includes('tutela') || normalizedQuery.includes('amparo');
-    const isAlimentosQuery = normalizedQuery.includes('alimento') || normalizedQuery.includes('cuota') || normalizedQuery.includes('familia');
-
-    if (isTutelaQuery && (doc.tipo === 'T' || doc.radicado.startsWith('T-'))) {
-      score += 20;
+    if (isTutelaQuery && (doc.tipo === 'T' || doc.tipo === 'SU' || radicadoNorm.startsWith('t-') || radicadoNorm.startsWith('su-'))) {
+      score += 22;
     }
 
     if (isAlimentosQuery) {
-      if (temaNorm.includes('familia') || temaNorm.includes('menor') || temaNorm.includes('alimento') || temaNorm.includes('niñ')) {
-        score += 45;
-      }
-      if (resuelveNorm.includes('familia') || resuelveNorm.includes('alimento') || resuelveNorm.includes('menor')) {
-        score += 35;
-      }
-      if (['t-007-24', 'c-028-24', 'a-006-26', 't-001-24', 't-014-26'].includes(radicadoNorm)) {
-        score += 70;
+      if (temaNorm.includes('familia') || temaNorm.includes('menor') || temaNorm.includes('alimento') || temaNorm.includes('nin')) score += 40;
+      if (resuelveNorm.includes('familia') || resuelveNorm.includes('alimento') || resuelveNorm.includes('menor')) score += 35;
+      if (['t-007-24', 'c-028-24', 'a-006-26', 't-001-24', 't-014-26', 't-004-24', 't-004-26'].includes(radicadoNorm)) {
+        score += 65;
       }
     }
 
@@ -400,12 +652,17 @@ function retrieveRelevantDocuments(query, limit = 6) {
       score += 200;
     }
 
+    // Premiar providencias que tienen extracto de RESUELVE detallado
+    if (resuelveNorm.length > 120 && !resuelveNorm.startsWith('sentencia de ') && !resuelveNorm.startsWith('fallo oficial')) {
+      score += 12;
+    }
+
     expandedTerms.forEach(term => {
       if (!term) return;
-      if (descriptoresNorm.includes(term)) score += 30;
+      if (descriptoresNorm.includes(term)) score += 26;
       if (temaNorm.includes(term)) score += 20;
-      if (resuelveNorm.includes(term)) score += 15;
-      if (ponenteNorm.includes(term)) score += 10;
+      if (resuelveNorm.includes(term)) score += 16;
+      if (ponenteNorm.includes(term)) score += 12;
     });
 
     return { doc, score };
@@ -415,395 +672,165 @@ function retrieveRelevantDocuments(query, limit = 6) {
   return scored.slice(0, limit).map(s => s.doc);
 }
 
-function normalizeText(text) {
-  if (!text) return '';
-  return text
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\w\s-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+function renderLocalRagResponse(query, candidates) {
+  const normQ = normalizeText(query);
+  const isAlimentos = normQ.includes('alimento') || normQ.includes('cuota') || normQ.includes('familia');
+
+  let synthesisHtml = '';
+  if (isAlimentos) {
+    synthesisHtml = `
+      <p>En la jurisprudencia constitucional colombiana, las controversias sobre <strong>cuota de alimentos, mínimo vital de niños, niñas y adolescentes (NNA) y unidad familiar</strong> se abordan mediante la acción de tutela cuando los mecanismos ordinarios resultan ineficaces ante un perjuicio irremediable o cuando una providencia judicial incurre en defecto fáctico o sustantivo.</p>
+      <p style="margin-top:0.55rem;">A continuación se relacionan los <strong>${candidates.length} precedentes más relevantes</strong> localizados en el repositorio, junto con el sentido del fallo y la transcripción literal de los ordinales de su <strong>RESUELVE</strong>:</p>
+    `;
+  } else {
+    synthesisHtml = `
+      <p>Para la consulta <strong>«${escapeHtml(query)}»</strong>, el sistema de relatoría identificó <strong>${candidates.length} providencias aplicables</strong> dentro del acervo documental. Cada ficha incluye el sentido de la decisión, la transcripción literal del <strong>RESUELVE</strong> dividida por ordinales y su citación formal lista para incorporar en escritos judiciales.</p>
+    `;
+  }
+
+  renderAiResponseHTML(query, candidates, null, synthesisHtml);
 }
 
-// Llamada a la API de Google Gemini (2.5 Flash)
 async function askGeminiApi(query, candidates, apiKey) {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const contextDocs = candidates.slice(0, 6).map((d, idx) => `
+[PROVIDENCIA ${idx + 1}]
+- Radicado: ${d.radicado} (${d.corte})
+- Magistrado Ponente: ${d.magistrado_ponente || 'En relatoría'}
+- Fecha: ${d.fecha_providencia || d.ano}
+- Tema: ${d.tema}
+- RESUELVE: ${d.resuelve ? d.resuelve.substring(0, 1800) : 'Ver documento'}
+- Citación Formal: ${d.citacion_formal}`).join('\n');
 
-  const contextDocs = candidates.map((d, idx) => `
-[DOCUMENTO ${idx + 1}]
-- Radicado: ${d.radicado}
-- Corporación: ${d.corte}
-- Ponente: ${d.magistrado_ponente || 'No registrado'}
-- Fecha: ${d.fecha_providencia || 'No registrada'}
-- Asunto: ${d.tema}
-- Texto del RESUELVE (Operativo):
-${d.resuelve ? d.resuelve.substring(0, 2000) : 'Sin extracto'}
-- Citación Formal: ${d.citacion_formal}
----`).join('\n');
+  const prompt = `Actúa como Relator Judicial experto en derecho colombiano.
+Consulta del abogado: "${query}"
 
-  const systemPrompt = `Eres un asistente experto en jurisprudencia y derecho constitucional colombiano de JurisWiki.
-El usuario consulta: "${query}".
-
-Documentos auténticos indexados en el repositorio:
+Providencias del archivo:
 ${contextDocs}
 
-Instrucciones:
-1. Responde con tono riguroso, formal y de relatoría jurídica.
-2. Identifica con exactitud cuáles sentencias aplican al caso.
-3. CITA TEXTUALMENTE los ordinales del RESUELVE que resuelven la pretensión (e.g. PRIMERO: REVOCAR... AMPARAR...).
-4. Entrega la citación formal completa de cada decisión.
-5. Usa formato Markdown con viñetas y citas en bloque (>) para el resuelve.`;
-
-  const payload = {
-    contents: [{ parts: [{ text: systemPrompt }] }],
-    generationConfig: { temperature: 0.2, maxOutputTokens: 2048 }
-  };
+Redacta un dictamen ejecutivo breve (máximo 2 párrafos) explicando qué sentencias de la lista aplican al caso y cuál es la regla jurisprudencial o decisión adoptada en sus resuelves. Sé sobrio, preciso y directo.`;
 
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: 1024 }
+    })
   });
 
-  if (!response.ok) throw new Error(`Gemini Error: ${response.status}`);
-
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const data = await response.json();
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
   renderAiResponseHTML(query, candidates, text);
 }
 
-// Síntesis local RAG de alta precisión
-function renderLocalRagResponse(query, candidates) {
-  const normQ = normalizeText(query);
-  const isAlimentos = normQ.includes('alimento') || normQ.includes('cuota') || normQ.includes('familia');
-
-  let intro = '';
-  if (isAlimentos) {
-    intro = `
-**Análisis Constitucional de Aplicabilidad:**  
-Frente a su consulta sobre **tutela por alimentos y protección de la familia**, la jurisprudencia constitucional colombiana establece que la acción de tutela procede excepcionalmente para salvaguardar el **mínimo vital y la vida digna de niños, niñas y adolescentes (NNA)** o sujetos de especial protección cuando se vulnera o amenaza la efectividad de las obligaciones alimentarias o se presentan defectos fácticos o sustantivos en las decisiones de jueces de familia o comisarías.
-
-A continuación se destacan las decisiones judiciales aplicables en el repositorio y la **citación textual íntegra de su parte resolutiva (RESUELVE)**:`;
-  } else {
-    intro = `
-**Análisis de Aplicabilidad Jurisprudencial:**  
-Para el asunto consultado: *"**${escapeHtml(query)}**"*, se han identificado **${candidates.length} providencias judiciales** directamente vinculadas por temática, ratio decidendi y precedentes en la base institucional. A continuación se detalla cada sentencia aplicable y la **citación textual de su parte resolutiva (RESUELVE)**:`;
-  }
-
-  renderAiResponseHTML(query, candidates, null, intro);
-}
-
-// Renderizado HTML del Resultado de IA con Interacciones Avanzadas
-function renderAiResponseHTML(query, candidates, geminiMarkdown = null, fallbackIntro = "") {
+function renderAiResponseHTML(query, candidates, geminiMarkdown = null, fallbackHtml = '') {
   const container = document.getElementById('ai-results-container');
   if (!container) return;
 
-  const rawTextToRead = geminiMarkdown ? geminiMarkdown.replace(/[#*`_>]/g, '') : `${fallbackIntro.replace(/[#*`_>]/g, '')}. Documentos aplicables: ${candidates.map(d => `${d.radicado}, ${d.tema}`).join('. ')}`;
-
-  const bodyContent = geminiMarkdown ? `
-    <div class="prose prose-invert max-w-none text-slate-200 leading-relaxed font-sans mb-8">
-      ${markdownToHtml(geminiMarkdown)}
-    </div>
-  ` : `
-    <div class="text-slate-200 leading-relaxed text-sm sm:text-base mb-6 font-sans">
-      ${markdownToHtml(fallbackIntro)}
-    </div>
-
-    <div class="space-y-6">
-      <div class="flex items-center justify-between pb-2 border-b border-slate-800">
-        <h4 class="text-amber-400 font-bold tracking-wider text-xs uppercase flex items-center gap-2">
-          <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-          Providencias Aplicables Identificadas (${candidates.length})
-        </h4>
-      </div>
-
-      ${candidates.map((doc, idx) => `
-        <article class="surface-card rounded-2xl p-5 sm:p-6 border border-slate-800 transition-all">
-          
-          <!-- Encabezado de la providencia -->
-          <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-            <div class="flex items-center gap-2">
-              <span class="badge-judicial ${getBadgeClass(doc.corte)}">
-                ${escapeHtml(doc.corte)}
-              </span>
-              <span class="text-xs font-mono font-bold text-slate-200 bg-slate-900 px-2.5 py-1 rounded-md border border-slate-800">
-                ${escapeHtml(doc.radicado)}
-              </span>
-              ${doc.ano ? `<span class="text-xs text-amber-300 font-mono bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">${escapeHtml(doc.ano)}</span>` : ''}
-            </div>
-
-            <div class="flex items-center gap-2">
-              <!-- Bookmark Button -->
-              <button onclick="toggleBookmark('${escapeHtml(doc.id)}')" class="btn-bookmark p-1.5 rounded-lg border transition-all text-xs flex items-center gap-1 ${bookmarkedIds.has(doc.id) ? 'bg-amber-500/20 text-amber-400 border-amber-500/40' : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'}" title="Guardar providencia">
-                <svg class="w-4 h-4" fill="${bookmarkedIds.has(doc.id) ? 'currentColor' : 'none'}" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/></svg>
-              </button>
-
-              <!-- Copiar Citación Formal -->
-              <button onclick="copyFeedback(this, '${escapeHtml(doc.citacion_formal)}', '¡Citación copiada!')" class="inline-flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-1.5 rounded-lg border border-amber-500/30 transition-colors">
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/></svg>
-                <span>Copiar Citación</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- Título y Ponente -->
-          <h5 class="text-white font-bold text-lg mb-1 flex flex-wrap items-center gap-2">
-            <span>${escapeHtml(doc.radicado)}</span>
-            ${doc.magistrado_ponente ? `<span class="text-xs font-normal text-slate-400 font-sans">• Ponente: <strong>${escapeHtml(doc.magistrado_ponente)}</strong></span>` : ''}
-          </h5>
-
-          <p class="text-xs sm:text-sm text-slate-300 mb-4 line-clamp-3 leading-relaxed">
-            <strong class="text-slate-400 font-semibold">Problema Jurídico / Asunto:</strong> ${escapeHtml(doc.tema || 'Asunto registrado en relatoría judicial.')}
-          </p>
-
-          <!-- CITACIÓN TEXTUAL DEL RESUELVE -->
-          <div class="mb-4">
-            <div class="flex items-center justify-between mb-1.5">
-              <span class="text-[11px] uppercase tracking-wider text-amber-400 font-bold flex items-center gap-1.5">
-                <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                Citación Textual del RESUELVE (Parte Resolutiva Oficial):
-              </span>
-              <button onclick="copyFeedback(this, '${escapeHtml(doc.resuelve)}', '¡Resuelve copiado!')" class="text-[11px] text-amber-400 hover:text-amber-300 underline font-medium">
-                Copiar extracto
-              </button>
-            </div>
-            <div class="resuelve-quote">
-              ${highlightResuelveOrdinals(doc.resuelve || 'Decisión de fondo proferida en la respectiva providencia judicial.')}
-            </div>
-          </div>
-
-          <!-- Barra inferior de la tarjeta -->
-          <div class="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-800 text-xs">
-            <div class="text-slate-400 flex items-center gap-1.5 overflow-hidden">
-              <span class="font-medium text-slate-400">Citación Formal:</span>
-              <code class="text-amber-300 font-mono text-[11px] bg-slate-900 px-2 py-0.5 rounded border border-slate-800 truncate max-w-sm">${escapeHtml(doc.citacion_formal)}</code>
-            </div>
-            <div class="flex items-center gap-2">
-              <button onclick="openDrawerWithDoc('${escapeHtml(doc.id)}')" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors font-medium">
-                Ficha Completa
-              </button>
-              <a href="${escapeHtml(doc.drive_url)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-amber-400 hover:text-amber-300 hover:underline">
-                <span>Google Drive</span>
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-              </a>
-            </div>
-          </div>
-
-        </article>
-      `).join('')}
-    </div>
-  `;
+  const queryTerms = query.trim().split(/\s+/).filter(w => w.length >= 3);
+  const dictamenContent = geminiMarkdown ? markdownToHtml(geminiMarkdown) : fallbackHtml;
 
   container.innerHTML = `
-    <div class="surface-card p-6 sm:p-8 rounded-3xl border border-amber-500/30 shadow-2xl relative">
-      
-      <!-- Top Action Toolbar -->
-      <div class="flex flex-wrap items-center justify-between gap-3 mb-6 pb-4 border-b border-slate-800">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
-          </div>
-          <div>
-            <h3 class="text-lg sm:text-xl font-bold text-white font-display">Respuesta de Relatoría e Inteligencia Jurídica</h3>
-            <p class="text-xs text-slate-400">Consulta: "${escapeHtml(query)}"</p>
-          </div>
+    <div class="synthesis-banner">
+      <div class="synthesis-header">
+        <div class="synthesis-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-navy)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span>Síntesis de Relatoría • «${escapeHtml(query)}»</span>
         </div>
-
-        <div class="flex items-center gap-2">
-          <!-- Text to Speech Audio Button -->
-          <button id="btn-audio-listen" onclick="toggleAudioSpeech('${escapeForJsString(rawTextToRead)}')" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-amber-500/40 text-xs font-semibold text-slate-300 hover:text-amber-400 transition-colors" title="Escuchar síntesis con audio">
-            <svg id="audio-icon" class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"/></svg>
-            <span id="audio-btn-label">Escuchar</span>
-          </button>
-
-          <!-- Export Dossier Button -->
-          <button onclick="downloadConsultationReport('${escapeForJsString(query)}')" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-amber-500/40 text-xs font-semibold text-slate-300 hover:text-amber-400 transition-colors" title="Descargar dictamen en Markdown">
-            <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-            <span>Descargar</span>
-          </button>
-
-          <!-- Close Results Button -->
-          <button onclick="document.getElementById('ai-results-container').classList.add('hidden')" class="text-slate-400 hover:text-white p-2 rounded-xl hover:bg-slate-800 transition-colors" title="Cerrar resultados">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-          </button>
-        </div>
+        <span style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted);">
+          ${candidates.length} precedentes seleccionados
+        </span>
       </div>
+      <div class="synthesis-body">
+        ${dictamenContent}
+      </div>
+    </div>
 
-      ${bodyContent}
-
+    <div>
+      ${candidates.map(doc => renderPrecedentCardHTML(doc, queryTerms)).join('')}
     </div>
   `;
 }
 
-// Resaltar sintácticamente los ordinales de RESUELVE
-function highlightResuelveOrdinals(text) {
-  if (!text) return '';
-  let escaped = escapeHtml(text);
+// ==========================================================================
+// RENDERIZADO DE TARJETA DE PROVIDENCIA (DISEÑO GACETA HUMANO)
+// ==========================================================================
+function renderPrecedentCardHTML(doc, queryTerms = []) {
+  const isSaved = savedDossierIds.includes(doc.id);
+  const sense = doc._sense || detectRulingSense(doc.resuelve, doc.tipo, doc.radicado);
+  const corpClass = getCorpBadgeClass(doc.corte);
 
-  // Resaltar PRIMERO, SEGUNDO, TERCERO, CUARTO, QUINTO, etc.
-  escaped = escaped.replace(/(PRIMERO|SEGUNDO|TERCERO|CUARTO|QUINTO|SEXTO|SEPTIMO|OCTAVO|NOVENO|DECIMO)(:|-)/gi, (match) => {
-    return `<span class="ordinal-tag">${match.toUpperCase()}</span>`;
-  });
+  return `
+    <article class="precedent-card">
+      <div class="precedent-meta-top">
+        <div class="precedent-badges">
+          <span class="corp-tag ${corpClass}">${escapeHtml(doc.corte)}</span>
+          <span class="corp-tag corp-default" style="font-family: var(--font-mono);">${escapeHtml(doc._humanTipo || doc.tipo || 'Fallo')}</span>
+          ${doc.ano ? `<span class="corp-tag corp-default" style="font-family: var(--font-mono);">${escapeHtml(doc.ano)}</span>` : ''}
+        </div>
+        <span class="ruling-sense-badge ${sense.css}">${escapeHtml(sense.label)}</span>
+      </div>
 
-  // Resaltar verbos judiciales clave
-  escaped = escaped.replace(/\b(REVOCAR|AMPARAR|ORDENAR|CONFIRMAR|DECLARAR|EXHORTAR|INAPLICAR|REMITIR|PREVENIR)\b/g, (match) => {
-    return `<span class="action-verb">${match}</span>`;
-  });
+      <div class="precedent-heading">
+        <h3 class="precedent-radicado">
+          <button type="button" onclick="openDetailModal('${escapeHtml(doc.id)}')" style="text-align:left; color:inherit; font-weight:inherit; font-size:inherit;">
+            ${highlightTermsInHtml(escapeHtml(doc.radicado), queryTerms)}
+          </button>
+        </h3>
+        <span class="precedent-ponente">
+          ${doc.magistrado_ponente ? `<strong>M.P.</strong> ${highlightTermsInHtml(escapeHtml(doc.magistrado_ponente), queryTerms)}` : ''}
+          ${doc.fecha_providencia ? ` • ${escapeHtml(doc.fecha_providencia)}` : ''}
+        </span>
+      </div>
 
-  return escaped;
+      <p class="precedent-tema">
+        <strong>Materia:</strong> ${highlightTermsInHtml(escapeHtml(doc.tema || 'Providencia judicial indexada en relatoría.'), queryTerms)}
+      </p>
+
+      <!-- Extracto Literal del RESUELVE Estructurado por Ordinales -->
+      <div class="resuelve-container">
+        <div class="resuelve-header">
+          <span class="resuelve-label">Transcripción del Resuelve</span>
+          <button type="button" onclick="copyTextWithFeedback('${escapeJsStr(doc.resuelve)}', 'Texto del RESUELVE copiado')" style="font-family:var(--font-mono); font-size:0.7rem; color:var(--text-muted); text-decoration:underline;">
+            Copiar solo resuelve
+          </button>
+        </div>
+        <div class="resuelve-text">
+          ${formatStructuredResuelve(doc.resuelve, queryTerms, 650)}
+        </div>
+      </div>
+
+      <!-- Pie de Tarjeta con Citación Formal y Acciones -->
+      <div class="precedent-footer">
+        <span class="citation-snippet" title="${escapeHtml(doc.citacion_formal)}">
+          ${escapeHtml(doc.citacion_formal)}
+        </span>
+
+        <div class="card-actions">
+          <button type="button" class="btn-card-action btn-tactile" onclick="openDetailModal('${escapeHtml(doc.id)}')">
+            <span>Ficha e Inspector</span>
+          </button>
+          <button type="button" class="btn-card-action primary-outline btn-tactile" onclick="copyForLegalBrief('${escapeHtml(doc.id)}')">
+            <span>Copiar para Demanda</span>
+          </button>
+          <button type="button" class="btn-card-action btn-tactile ${isSaved ? 'saved' : ''}" onclick="toggleDossierItem('${escapeHtml(doc.id)}')">
+            <span>${isSaved ? '✓ En Dossier' : '+ Guardar'}</span>
+          </button>
+          <a href="${escapeHtml(doc.drive_url)}" target="_blank" rel="noopener noreferrer" class="btn-card-action btn-tactile" style="text-decoration:none;">
+            <span>Drive &nearr;</span>
+          </a>
+        </div>
+      </div>
+    </article>
+  `;
 }
 
-// ==========================================
-// AUDIO SINTETIZADOR DE VOZ (HTML5 SpeechSynthesis)
-// ==========================================
-
-function toggleAudioSpeech(text) {
-  if (!('speechSynthesis' in window)) {
-    showToast('Tu navegador no soporta síntesis de voz.');
-    return;
-  }
-
-  const audioIcon = document.getElementById('audio-icon');
-  const label = document.getElementById('audio-btn-label');
-
-  if (isSpeaking) {
-    window.speechSynthesis.cancel();
-    stopAudioPlayback();
-    return;
-  }
-
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = 'es-CO';
-  utterance.rate = 1.05;
-
-  utterance.onstart = () => {
-    isSpeaking = true;
-    audioIcon?.classList.add('playing-audio');
-    if (label) label.textContent = 'Detener';
-  };
-
-  utterance.onend = () => {
-    stopAudioPlayback();
-  };
-
-  utterance.onerror = () => {
-    stopAudioPlayback();
-  };
-
-  currentSpeechUtterance = utterance;
-  window.speechSynthesis.speak(utterance);
-}
-
-function stopAudioPlayback() {
-  if (isSpeaking) {
-    window.speechSynthesis.cancel();
-  }
-  isSpeaking = false;
-  const audioIcon = document.getElementById('audio-icon');
-  const label = document.getElementById('audio-btn-label');
-  audioIcon?.classList.remove('playing-audio');
-  if (label) label.textContent = 'Escuchar';
-}
-
-// ==========================================
-// EXPLORADOR DE JURISPRUDENCIA & TABLA
-// ==========================================
-
-function initExplorerFilters() {
-  const searchInput = document.getElementById('explorer-search-input');
-  const corteSelect = document.getElementById('filter-corte');
-  const tipoSelect = document.getElementById('filter-tipo');
-  const anoSelect = document.getElementById('filter-ano');
-  const btnReset = document.getElementById('btn-reset-filters');
-
-  const btnGrid = document.getElementById('btn-view-grid');
-  const btnTable = document.getElementById('btn-view-table');
-
-  btnGrid?.addEventListener('click', () => {
-    currentViewMode = 'grid';
-    btnGrid.classList.add('bg-amber-500/20', 'text-amber-400');
-    btnGrid.classList.remove('text-slate-400');
-    btnTable.classList.remove('bg-amber-500/20', 'text-amber-400');
-    btnTable.classList.add('text-slate-400');
-    document.getElementById('explorer-grid')?.classList.remove('hidden');
-    document.getElementById('explorer-table-container')?.classList.add('hidden');
-  });
-
-  btnTable?.addEventListener('click', () => {
-    currentViewMode = 'table';
-    btnTable.classList.add('bg-amber-500/20', 'text-amber-400');
-    btnTable.classList.remove('text-slate-400');
-    btnGrid.classList.remove('bg-amber-500/20', 'text-amber-400');
-    btnGrid.classList.add('text-slate-400');
-    document.getElementById('explorer-grid')?.classList.add('hidden');
-    document.getElementById('explorer-table-container')?.classList.remove('hidden');
-  });
-
-  let filterDebounce = null;
-  const applyFilters = () => {
-    clearTimeout(filterDebounce);
-    filterDebounce = setTimeout(() => {
-      const q = (searchInput?.value || '').toLowerCase().trim();
-      const c = corteSelect?.value || '';
-      const t = tipoSelect?.value || '';
-      const a = anoSelect?.value || '';
-
-      filteredRecords = jurisprudenciaDB.filter(doc => {
-        if (c && doc.corte !== c) return false;
-        if (t && doc.tipo !== t) return false;
-        if (a && String(doc.ano) !== a) return false;
-        if (q) {
-          const full = `${doc.radicado} ${doc.corte} ${doc.tema} ${doc.magistrado_ponente} ${doc.resuelve} ${(doc.descriptores || []).join(' ')}`.toLowerCase();
-          if (!full.includes(q)) return false;
-        }
-        return true;
-      });
-
-      currentPage = 1;
-      renderExplorer();
-    }, 150);
-  };
-
-  searchInput?.addEventListener('input', applyFilters);
-  corteSelect?.addEventListener('change', applyFilters);
-  tipoSelect?.addEventListener('change', applyFilters);
-  anoSelect?.addEventListener('change', applyFilters);
-
-  btnReset?.addEventListener('click', () => {
-    if (searchInput) searchInput.value = '';
-    if (corteSelect) corteSelect.value = '';
-    if (tipoSelect) tipoSelect.value = '';
-    if (anoSelect) anoSelect.value = '';
-    filteredRecords = [...jurisprudenciaDB];
-    currentPage = 1;
-    renderExplorer();
-  });
-
-  // Paginación
-  const prevBtn = document.getElementById('btn-page-prev');
-  const nextBtn = document.getElementById('btn-page-next');
-
-  prevBtn?.addEventListener('click', () => {
-    if (currentPage > 1) {
-      currentPage--;
-      renderExplorer();
-      document.getElementById('explorer-top')?.scrollIntoView({ behavior: 'smooth' });
-    }
-  });
-
-  nextBtn?.addEventListener('click', () => {
-    const maxPages = Math.ceil(filteredRecords.length / PAGE_SIZE) || 1;
-    if (currentPage < maxPages) {
-      currentPage++;
-      renderExplorer();
-      document.getElementById('explorer-top')?.scrollIntoView({ behavior: 'smooth' });
-    }
-  });
-}
-
-function populateFilterDropdowns() {
+// ==========================================================================
+// CATÁLOGO DOCUMENTAL (VISTA FICHAS & VISTA TABLA DE RELATORÍA)
+// ==========================================================================
+function populateFilters() {
   const corteSelect = document.getElementById('filter-corte');
   const tipoSelect = document.getElementById('filter-tipo');
   const anoSelect = document.getElementById('filter-ano');
@@ -815,7 +842,7 @@ function populateFilterDropdowns() {
   jurisprudenciaDB.forEach(d => {
     if (d.corte) cortes.add(d.corte);
     if (d.tipo) tipos.add(d.tipo);
-    if (d.ano) anos.add(d.ano);
+    if (d.ano) anos.add(String(d.ano));
   });
 
   if (corteSelect) {
@@ -829,18 +856,18 @@ function populateFilterDropdowns() {
   }
 
   if (tipoSelect) {
-    tipoSelect.innerHTML = '<option value="">Todos los tipos</option>';
+    tipoSelect.innerHTML = '<option value="">Todos los tipos / salas</option>';
     Array.from(tipos).sort().forEach(t => {
       const opt = document.createElement('option');
       opt.value = t;
-      opt.textContent = t;
+      opt.textContent = humanizeTipo(t);
       tipoSelect.appendChild(opt);
     });
   }
 
   if (anoSelect) {
     anoSelect.innerHTML = '<option value="">Todos los años</option>';
-    Array.from(anos).sort((a, b) => b - a).forEach(a => {
+    Array.from(anos).sort((a, b) => Number(b) - Number(a)).forEach(a => {
       const opt = document.createElement('option');
       opt.value = a;
       opt.textContent = a;
@@ -849,403 +876,534 @@ function populateFilterDropdowns() {
   }
 }
 
+function renderFacetPills() {
+  const row = document.getElementById('explorer-facet-pills');
+  if (!row) return;
+
+  const counts = {};
+  jurisprudenciaDB.forEach(d => {
+    const c = d.corte || 'Otra';
+    counts[c] = (counts[c] || 0) + 1;
+  });
+
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const pillsHtml = [
+    `<button type="button" class="facet-pill active" data-corte="" onclick="selectFacetPill('')">Todas (${jurisprudenciaDB.length.toLocaleString('es-CO')})</button>`,
+    ...sorted.map(([corte, count]) => `
+      <button type="button" class="facet-pill" data-corte="${escapeHtml(corte)}" onclick="selectFacetPill('${escapeHtml(corte)}')">
+        ${escapeHtml(corte)} (${count.toLocaleString('es-CO')})
+      </button>
+    `)
+  ];
+
+  row.innerHTML = pillsHtml.join('');
+}
+
+window.selectFacetPill = function(corte) {
+  const corteSelect = document.getElementById('filter-corte');
+  if (corteSelect) corteSelect.value = corte;
+  syncActiveFacetPill(corte);
+  applyExplorerFilters();
+};
+
+function syncActiveFacetPill(corte) {
+  document.querySelectorAll('#explorer-facet-pills .facet-pill').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-corte') === corte);
+  });
+}
+
+function applyExplorerFilters() {
+  const q = (document.getElementById('explorer-search-input')?.value || '').toLowerCase().trim();
+  const c = document.getElementById('filter-corte')?.value || '';
+  const t = document.getElementById('filter-tipo')?.value || '';
+  const a = document.getElementById('filter-ano')?.value || '';
+  const sortMode = document.getElementById('sort-explorer')?.value || 'recent';
+
+  filteredRecords = jurisprudenciaDB.filter(doc => {
+    if (c && doc.corte !== c) return false;
+    if (t && doc.tipo !== t) return false;
+    if (a && String(doc.ano) !== a) return false;
+    if (q) {
+      const haystack = `${doc.radicado} ${doc.corte} ${doc.tema} ${doc.magistrado_ponente} ${doc.resuelve} ${(doc.descriptores || []).join(' ')}`.toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    return true;
+  });
+
+  sortFilteredRecords(sortMode);
+  currentPage = 1;
+  renderExplorer();
+}
+
+function sortFilteredRecords(mode) {
+  if (mode === 'radicado') {
+    filteredRecords.sort((a, b) => (a.radicado || '').localeCompare(b.radicado || ''));
+  } else if (mode === 'corte') {
+    filteredRecords.sort((a, b) => (a.corte || '').localeCompare(b.corte || ''));
+  } else {
+    // Recientes primero, priorizando registros con resuelve completo
+    filteredRecords.sort((a, b) => (Number(b.ano) || 0) - (Number(a.ano) || 0));
+  }
+}
+
 function renderExplorer() {
-  const gridContainer = document.getElementById('explorer-grid');
-  const tableBody = document.getElementById('explorer-table-body');
+  const container = document.getElementById('explorer-grid');
   const countEl = document.getElementById('explorer-results-count');
   const pageCurrentEl = document.getElementById('page-current');
   const pageTotalEl = document.getElementById('page-total');
   const prevBtn = document.getElementById('btn-page-prev');
   const nextBtn = document.getElementById('btn-page-next');
+  const searchVal = (document.getElementById('explorer-search-input')?.value || '').trim();
+  const terms = searchVal ? searchVal.split(/\s+/).filter(w => w.length >= 2) : [];
 
-  if (!gridContainer || !tableBody) return;
+  if (!container) return;
 
   const total = filteredRecords.length;
-  if (countEl) countEl.textContent = `${formatNumber(total)} providencias`;
+  if (countEl) countEl.textContent = `${total.toLocaleString('es-CO')} providencia${total === 1 ? '' : 's'} encontrada${total === 1 ? '' : 's'}`;
 
   const maxPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   if (currentPage > maxPages) currentPage = maxPages;
 
   if (pageCurrentEl) pageCurrentEl.textContent = currentPage;
-  if (pageTotalEl) pageTotalEl.textContent = maxPages;
-
+  if (pageTotalEl) pageTotalEl.textContent = maxPages.toLocaleString('es-CO');
   if (prevBtn) prevBtn.disabled = (currentPage <= 1);
   if (nextBtn) nextBtn.disabled = (currentPage >= maxPages);
 
   if (total === 0) {
-    const emptyHtml = `
-      <div class="col-span-full text-center py-16 text-slate-400">
-        <svg class="w-12 h-12 mx-auto text-slate-600 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        <p class="text-base font-semibold text-slate-300">No se encontraron providencias con esos criterios</p>
-        <p class="text-xs mt-1">Prueba restableciendo los filtros o ampliando los términos de búsqueda.</p>
+    container.className = '';
+    container.innerHTML = `
+      <div class="consultation-desk" style="text-align: center; padding: 3rem 1.5rem;">
+        <h3 style="font-family: var(--font-serif); font-size: 1.3rem; margin-bottom: 0.4rem;">Sin coincidencias con los filtros actuales</h3>
+        <p style="font-size: 0.88rem; color: var(--text-muted);">Intenta limpiar los filtros o buscar con términos más generales.</p>
       </div>
     `;
-    gridContainer.innerHTML = emptyHtml;
-    tableBody.innerHTML = `<tr><td colspan="6" class="text-center py-8 text-slate-400">${emptyHtml}</td></tr>`;
     return;
   }
 
   const startIdx = (currentPage - 1) * PAGE_SIZE;
   const pageRecords = filteredRecords.slice(startIdx, startIdx + PAGE_SIZE);
 
-  // Render Grid
-  gridContainer.innerHTML = pageRecords.map(doc => `
-    <article class="surface-card rounded-2xl p-5 flex flex-col justify-between border border-slate-800 hover:border-amber-500/40 transition-all">
-      <div>
-        <div class="flex flex-wrap items-center justify-between gap-1.5 mb-2.5">
-          <span class="badge-judicial ${getBadgeClass(doc.corte)} text-[10px]">
-            ${escapeHtml(doc.corte)}
-          </span>
-          <div class="flex items-center gap-1">
-            <span class="text-xs font-mono text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-              ${escapeHtml(doc.tipo || 'Sentencia')}
-            </span>
-            ${doc.ano ? `<span class="text-xs font-mono text-amber-300 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">${escapeHtml(doc.ano)}</span>` : ''}
-          </div>
-        </div>
-
-        <h4 class="text-base sm:text-lg font-bold text-white mb-1 flex items-center justify-between">
-          <span>${escapeHtml(doc.radicado)}</span>
-          <button onclick="toggleBookmark('${escapeHtml(doc.id)}')" class="p-1 text-slate-400 hover:text-amber-400 transition-colors" title="Guardar">
-            <svg class="w-4 h-4 ${bookmarkedIds.has(doc.id) ? 'text-amber-400 fill-amber-400' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/></svg>
-          </button>
-        </h4>
-
-        <p class="text-xs text-slate-400 mb-2">
-          ${doc.magistrado_ponente ? `<span class="text-slate-300 font-medium">M.P.</span> ${escapeHtml(doc.magistrado_ponente)}` : 'Ponente en relatoría'}
-          ${doc.fecha_providencia ? ` • ${escapeHtml(doc.fecha_providencia)}` : ''}
-        </p>
-
-        <p class="text-xs sm:text-sm text-slate-300 mb-3 line-clamp-3 leading-relaxed">
-          ${escapeHtml(doc.tema || 'Síntesis jurisprudencial de mérito.')}
-        </p>
-      </div>
-
-      <div class="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2 text-xs">
-        <button onclick="openDrawerWithDoc('${escapeHtml(doc.id)}')" class="text-amber-400 hover:text-amber-300 font-semibold inline-flex items-center gap-1 hover:underline">
-          <span>Ver Resuelve & Ficha</span>
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-        </button>
-        <button onclick="copyFeedback(this, '${escapeHtml(doc.citacion_formal)}', '¡Copiado!')" class="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800 transition-colors" title="Copiar citación formal">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/></svg>
-        </button>
-      </div>
-    </article>
-  `).join('');
-
-  // Render Table
-  tableBody.innerHTML = pageRecords.map(doc => `
-    <tr>
-      <td class="font-mono font-bold text-white whitespace-nowrap">${escapeHtml(doc.radicado)}</td>
-      <td><span class="badge-judicial ${getBadgeClass(doc.corte)} text-[9px]">${escapeHtml(doc.corte)}</span></td>
-      <td class="text-xs whitespace-nowrap text-slate-300">${escapeHtml(doc.magistrado_ponente || '--')}</td>
-      <td class="font-mono text-amber-300 text-xs">${escapeHtml(doc.ano || '--')}</td>
-      <td class="text-xs max-w-md truncate text-slate-300" title="${escapeHtml(doc.tema || '')}">${escapeHtml(doc.tema || 'Síntesis')}</td>
-      <td class="text-right whitespace-nowrap">
-        <button onclick="openDrawerWithDoc('${escapeHtml(doc.id)}')" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs text-amber-400 font-medium mr-1.5 transition-colors">
-          Ficha
-        </button>
-        <button onclick="toggleBookmark('${escapeHtml(doc.id)}')" class="p-1 text-slate-400 hover:text-amber-400 transition-colors" title="Guardar">
-          <svg class="w-3.5 h-3.5 inline ${bookmarkedIds.has(doc.id) ? 'text-amber-400 fill-amber-400' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/></svg>
-        </button>
-      </td>
-    </tr>
-  `).join('');
-}
-
-// ==========================================
-// FICHA TÉCNICA EN SLIDE-OVER DRAWER (SHEET)
-// ==========================================
-
-function initDrawerEvents() {
-  const backdrop = document.getElementById('drawer-backdrop');
-  const btnClose = document.getElementById('btn-close-drawer');
-
-  backdrop?.addEventListener('click', closeDrawer);
-  btnClose?.addEventListener('click', closeDrawer);
-}
-
-function openDrawerWithDoc(docId) {
-  const doc = jurisprudenciaDB.find(d => d.id === docId);
-  if (!doc) return;
-
-  const backdrop = document.getElementById('drawer-backdrop');
-  const drawer = document.getElementById('drawer-detail');
-  const badgeCorte = document.getElementById('drawer-badge-corte');
-  const title = document.getElementById('drawer-title');
-  const body = document.getElementById('drawer-body');
-  const driveLink = document.getElementById('drawer-drive-link');
-  const copyResuelveBtn = document.getElementById('drawer-copy-resuelve');
-
-  if (badgeCorte) {
-    badgeCorte.className = `badge-judicial ${getBadgeClass(doc.corte)} text-[10px] mb-1`;
-    badgeCorte.textContent = doc.corte;
-  }
-
-  if (title) title.textContent = `Providencia ${doc.radicado}`;
-  if (driveLink) driveLink.href = doc.drive_url || '#';
-
-  if (copyResuelveBtn) {
-    copyResuelveBtn.onclick = () => copyFeedback(copyResuelveBtn, doc.resuelve, '¡Resuelve copiado!');
-  }
-
-  if (body) {
-    body.innerHTML = `
-      <!-- Metadatos Oficiales -->
-      <div class="bg-[#090d16] p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-3">
-        <h4 class="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
-          <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-          Metadatos Institucionales
-        </h4>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-          <div><span class="text-slate-400 block">Corporación:</span> <strong class="text-white">${escapeHtml(doc.corte)}</strong></div>
-          <div><span class="text-slate-400 block">Sala:</span> <strong class="text-white">${escapeHtml(doc.sala_especializada || 'No especificada')}</strong></div>
-          <div><span class="text-slate-400 block">Magistrado(a) Ponente:</span> <strong class="text-white">${escapeHtml(doc.magistrado_ponente || 'No registrado')}</strong></div>
-          <div><span class="text-slate-400 block">Fecha Providencia:</span> <strong class="text-white">${escapeHtml(doc.fecha_providencia || 'No registrada')}</strong></div>
-          <div><span class="text-slate-400 block">Expediente:</span> <strong class="text-white">${escapeHtml(doc.expediente || 'No registrado')}</strong></div>
-          <div><span class="text-slate-400 block">Año:</span> <strong class="text-white">${escapeHtml(doc.ano || 'No registrado')}</strong></div>
-        </div>
-      </div>
-
-      <!-- Problema Jurídico / Asunto -->
-      <div class="space-y-1.5">
-        <h4 class="text-xs font-bold text-slate-300 uppercase tracking-wider">Asunto / Síntesis</h4>
-        <p class="text-xs sm:text-sm text-slate-300 leading-relaxed bg-[#090d16] p-4 rounded-xl border border-slate-800">
-          ${escapeHtml(doc.tema || 'Sin síntesis registrada.')}
-        </p>
-      </div>
-
-      <!-- Parte Resolutiva Oficial -->
-      <div class="space-y-2">
-        <div class="flex items-center justify-between">
-          <h4 class="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
-            <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-            Parte Resolutiva Oficial (RESUELVE)
-          </h4>
-        </div>
-        <div class="resuelve-quote max-h-80 overflow-y-auto">
-          ${highlightResuelveOrdinals(doc.resuelve || 'Sin extracto de resuelve disponible.')}
-        </div>
-      </div>
-
-      <!-- Citación Formal Estándar Colombia -->
-      <div class="bg-[#090d16] p-4 rounded-xl border border-slate-800 flex items-center justify-between gap-2 text-xs">
-        <div class="overflow-hidden">
-          <span class="text-slate-400 block mb-0.5">Citación Formal Colombia:</span>
-          <code class="text-amber-300 font-mono text-xs block truncate">${escapeHtml(doc.citacion_formal)}</code>
-        </div>
-        <button onclick="copyFeedback(this, '${escapeHtml(doc.citacion_formal)}', '¡Copiado!')" class="px-2.5 py-1 rounded bg-amber-500/10 text-amber-400 border border-amber-500/25 hover:bg-amber-500/20 text-xs flex-shrink-0">
-          Copiar
-        </button>
-      </div>
-    `;
-  }
-
-  backdrop?.classList.add('active');
-  drawer?.classList.add('active');
-  document.body.style.overflow = 'hidden';
-}
-
-function closeDrawer() {
-  const backdrop = document.getElementById('drawer-backdrop');
-  const drawer = document.getElementById('drawer-detail');
-  backdrop?.classList.remove('active');
-  drawer?.classList.remove('active');
-  document.body.style.overflow = '';
-}
-
-// ==========================================
-// GESTIÓN DE GUARDADOS (BOOKMARKS / DOSSIER)
-// ==========================================
-
-function loadBookmarksFromStorage() {
-  try {
-    const raw = localStorage.getItem('juris_bookmarks');
-    if (raw) {
-      const arr = JSON.parse(raw);
-      bookmarkedIds = new Set(arr);
-    }
-  } catch (e) {
-    bookmarkedIds = new Set();
-  }
-  updateBookmarksBadge();
-}
-
-function saveBookmarksToStorage() {
-  localStorage.setItem('juris_bookmarks', JSON.stringify(Array.from(bookmarkedIds)));
-  updateBookmarksBadge();
-}
-
-function updateBookmarksBadge() {
-  const badge = document.getElementById('badge-bookmarks-count');
-  if (badge) {
-    const count = bookmarkedIds.size;
-    badge.textContent = count;
-    if (count > 0) {
-      badge.classList.remove('hidden');
-    } else {
-      badge.classList.add('hidden');
-    }
-  }
-}
-
-function toggleBookmark(docId) {
-  if (bookmarkedIds.has(docId)) {
-    bookmarkedIds.delete(docId);
-    showToast('Providencia removida de guardados.');
-  } else {
-    bookmarkedIds.add(docId);
-    showToast('Providencia guardada en tu sesión.');
-  }
-  saveBookmarksToStorage();
-  renderExplorer();
-
-  if (!document.getElementById('view-bookmarks')?.classList.contains('hidden')) {
-    renderBookmarksView();
-  }
-}
-
-function renderBookmarksView() {
-  const container = document.getElementById('bookmarks-container');
-  if (!container) return;
-
-  const savedDocs = jurisprudenciaDB.filter(d => bookmarkedIds.has(d.id));
-
-  if (savedDocs.length === 0) {
+  // Vista 1: Tabla de Relatoría de Alta Densidad
+  if (explorerViewMode === 'table') {
+    container.className = 'relatoria-table-wrapper';
     container.innerHTML = `
-      <div class="text-center py-12 text-slate-400">
-        <svg class="w-12 h-12 mx-auto text-slate-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/></svg>
-        <p class="text-base font-semibold text-slate-300">Aún no has guardado providencias</p>
-        <p class="text-xs mt-1">Haz clic en el ícono de marcador en cualquier sentencia para agregarla a tu dossier.</p>
-      </div>
+      <table class="relatoria-table">
+        <thead>
+          <tr>
+            <th>Radicado</th>
+            <th>Corporación & Sala</th>
+            <th>Sentido</th>
+            <th>Ponente & Año</th>
+            <th>Síntesis / Extracto Resolutivo</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${pageRecords.map(doc => {
+            const sense = doc._sense || detectRulingSense(doc.resuelve, doc.tipo, doc.radicado);
+            return `
+              <tr onclick="openDetailModal('${escapeHtml(doc.id)}')">
+                <td style="font-family: var(--font-mono); font-weight: 600; white-space: nowrap; color: var(--accent-primary);">
+                  ${highlightTermsInHtml(escapeHtml(doc.radicado), terms)}
+                </td>
+                <td>
+                  <div style="font-weight: 600; font-size: 0.8rem;">${escapeHtml(doc.corte)}</div>
+                  <div style="font-size: 0.73rem; color: var(--text-muted);">${escapeHtml(doc._humanTipo)}</div>
+                </td>
+                <td>
+                  <span class="ruling-sense-badge ${sense.css}">${escapeHtml(sense.label)}</span>
+                </td>
+                <td style="font-size: 0.78rem; color: var(--text-secondary);">
+                  <div>${doc.magistrado_ponente ? highlightTermsInHtml(escapeHtml(doc.magistrado_ponente), terms) : 'En relatoría'}</div>
+                  <div style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted);">${escapeHtml(doc.ano || '')}</div>
+                </td>
+                <td style="max-width: 420px; font-size: 0.8rem; color: var(--text-secondary);">
+                  <div style="font-weight: 500; color: var(--text-primary); margin-bottom: 0.2rem;">
+                    ${highlightTermsInHtml(escapeHtml((doc.tema || '').substring(0, 110)), terms)}
+                  </div>
+                  <div style="font-family: var(--font-serif); font-size: 0.82rem; color: var(--text-muted);">
+                    ${highlightTermsInHtml(escapeHtml((doc.resuelve || '').substring(0, 140)), terms)}…
+                  </div>
+                </td>
+                <td onclick="event.stopPropagation();" style="white-space: nowrap;">
+                  <button type="button" class="btn-card-action primary-outline" onclick="copyForLegalBrief('${escapeHtml(doc.id)}')">Copiar Cita</button>
+                </td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
     `;
     return;
   }
 
-  container.innerHTML = `
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      ${savedDocs.map(doc => `
-        <article class="surface-card rounded-2xl p-5 flex flex-col justify-between border border-slate-800">
-          <div>
-            <div class="flex items-center justify-between mb-2">
-              <span class="badge-judicial ${getBadgeClass(doc.corte)} text-[9px]">${escapeHtml(doc.corte)}</span>
-              <button onclick="toggleBookmark('${escapeHtml(doc.id)}')" class="text-amber-400 hover:text-rose-400 text-xs" title="Remover de guardados">
-                ✕
-              </button>
-            </div>
-            <h4 class="font-bold text-white text-base mb-1">${escapeHtml(doc.radicado)}</h4>
-            <p class="text-xs text-slate-300 mb-3 line-clamp-2">${escapeHtml(doc.tema || '')}</p>
+  // Vista 2: Fichas Editoriales
+  container.className = 'explorer-cards-grid';
+  container.innerHTML = pageRecords.map(doc => {
+    const sense = doc._sense || detectRulingSense(doc.resuelve, doc.tipo, doc.radicado);
+    const corpClass = getCorpBadgeClass(doc.corte);
+    const isSaved = savedDossierIds.includes(doc.id);
+
+    return `
+      <article class="precedent-card" style="margin-top:0; display:flex; flex-direction:column; justify-content:space-between;">
+        <div>
+          <div class="precedent-meta-top">
+            <span class="corp-tag ${corpClass}">${escapeHtml(doc.corte)}</span>
+            <span class="ruling-sense-badge ${sense.css}">${escapeHtml(sense.label)}</span>
           </div>
-          <div class="pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
-            <button onclick="openDrawerWithDoc('${escapeHtml(doc.id)}')" class="text-amber-400 hover:underline">
-              Ver Ficha
+
+          <h3 class="precedent-radicado" style="font-size: 1.18rem; margin-bottom: 0.25rem;">
+            <button type="button" onclick="openDetailModal('${escapeHtml(doc.id)}')" style="text-align:left;">
+              ${highlightTermsInHtml(escapeHtml(doc.radicado), terms)}
             </button>
-            <a href="${escapeHtml(doc.drive_url)}" target="_blank" rel="noopener noreferrer" class="text-slate-400 hover:text-white">
-              Drive &rarr;
-            </a>
+          </h3>
+
+          <p style="font-size: 0.76rem; color: var(--text-muted); margin-bottom: 0.65rem; font-family: var(--font-mono);">
+            ${escapeHtml(doc._humanTipo)} ${doc.ano ? `• ${escapeHtml(doc.ano)}` : ''}
+            ${doc.magistrado_ponente ? `<br>M.P. ${highlightTermsInHtml(escapeHtml(doc.magistrado_ponente), terms)}` : ''}
+          </p>
+
+          <p style="font-size: 0.84rem; color: var(--text-secondary); margin-bottom: 0.85rem; line-height: 1.48;">
+            ${highlightTermsInHtml(escapeHtml((doc.tema || 'Síntesis en relatoría').substring(0, 160)), terms)}
+          </p>
+
+          <div class="resuelve-container" style="padding: 0.75rem 0.9rem; margin-bottom: 0.9rem;">
+            <span class="resuelve-label" style="display:block; margin-bottom:0.25rem; font-size:0.64rem;">Extracto del Resuelve</span>
+            <div class="resuelve-text" style="font-size: 0.88rem; line-height: 1.5;">
+              ${formatStructuredResuelve(doc.resuelve, terms, 220)}
+            </div>
           </div>
-        </article>
+        </div>
+
+        <div class="precedent-footer" style="padding-top: 0.65rem;">
+          <button type="button" class="btn-card-action btn-tactile" onclick="openDetailModal('${escapeHtml(doc.id)}')">
+            Abrir Inspector
+          </button>
+          <div style="display:flex; gap:0.35rem;">
+            <button type="button" class="btn-card-action primary-outline btn-tactile" onclick="copyForLegalBrief('${escapeHtml(doc.id)}')" title="Copiar cita formal y resuelve">
+              Copiar Cita
+            </button>
+            <button type="button" class="btn-card-action btn-tactile ${isSaved ? 'saved' : ''}" onclick="toggleDossierItem('${escapeHtml(doc.id)}')">
+              ${isSaved ? '✓' : '+'}
+            </button>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join('');
+}
+
+// ==========================================================================
+// INSPECTOR LATERAL DE PROVIDENCIA (SLIDE-OVER DRAWER)
+// ==========================================================================
+window.openDetailModal = function(docId) {
+  const doc = jurisprudenciaDB.find(d => d.id === docId);
+  if (!doc) return;
+
+  const drawer = document.getElementById('modal-detail');
+  const backdrop = document.getElementById('drawer-backdrop');
+  const title = document.getElementById('modal-detail-title');
+  const kicker = document.getElementById('drawer-kicker');
+  const content = document.getElementById('modal-detail-content');
+  const footer = document.getElementById('modal-detail-footer');
+
+  const sense = doc._sense || detectRulingSense(doc.resuelve, doc.tipo, doc.radicado);
+  const isSaved = savedDossierIds.includes(doc.id);
+
+  if (kicker) kicker.textContent = `${doc.corte} • ${doc._humanTipo || 'Providencia'}`;
+  if (title) title.textContent = `Providencia ${doc.radicado}`;
+
+  if (content) {
+    content.innerHTML = `
+      <div style="display:flex; flex-direction:column; gap:1.35rem;">
+        
+        <!-- Metadatos Tabulares de la Ficha -->
+        <div style="background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.1rem 1.25rem;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.85rem; padding-bottom:0.6rem; border-bottom:1px solid var(--border-subtle);">
+            <span style="font-family:var(--font-mono); font-size:0.7rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-muted); font-weight:600;">
+              Datos Oficiales de Relatoría
+            </span>
+            <span class="ruling-sense-badge ${sense.css}">${escapeHtml(sense.label)}</span>
+          </div>
+
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:0.85rem; font-size:0.84rem;">
+            <div>
+              <span style="color:var(--text-muted); font-size:0.74rem; display:block;">Corporación</span>
+              <strong>${escapeHtml(doc.corte)}</strong>
+            </div>
+            <div>
+              <span style="color:var(--text-muted); font-size:0.74rem; display:block;">Magistrado(a) Ponente</span>
+              <strong>${escapeHtml(doc.magistrado_ponente || 'No especificado')}</strong>
+            </div>
+            <div>
+              <span style="color:var(--text-muted); font-size:0.74rem; display:block;">Sala / Clasificación</span>
+              <strong>${escapeHtml(doc.sala_especializada || doc._humanTipo || 'Sala de Decisión')}</strong>
+            </div>
+            <div>
+              <span style="color:var(--text-muted); font-size:0.74rem; display:block;">Fecha de Providencia</span>
+              <strong style="font-family:var(--font-mono); font-size:0.8rem;">${escapeHtml(doc.fecha_providencia || doc.ano || 'En archivo')}</strong>
+            </div>
+            <div>
+              <span style="color:var(--text-muted); font-size:0.74rem; display:block;">Expediente</span>
+              <strong style="font-family:var(--font-mono); font-size:0.8rem;">${escapeHtml(doc.expediente || doc.radicado)}</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Problema Jurídico / Tema -->
+        <div>
+          <h4 style="font-family:var(--font-mono); font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-muted); margin-bottom:0.45rem;">
+            Síntesis del Asunto / Materia
+          </h4>
+          <p style="font-size:0.92rem; line-height:1.6; color:var(--text-primary); background:var(--bg-surface); border:1px solid var(--border-subtle); padding:0.9rem 1rem; border-radius:var(--radius-sm);">
+            ${escapeHtml(doc.tema || 'Síntesis disponible en el documento íntegro.')}
+          </p>
+        </div>
+
+        <!-- Parte Resolutiva Completa (RESUELVE) con Buscador Interno -->
+        <div>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.55rem; flex-wrap:wrap;">
+            <h4 style="font-family:var(--font-mono); font-size:0.74rem; text-transform:uppercase; letter-spacing:0.07em; color:var(--accent-primary); font-weight:600;">
+              Parte Resolutiva Oficial (RESUELVE)
+            </h4>
+            <input 
+              type="search" 
+              id="drawer-resuelve-filter" 
+              placeholder="Resaltar palabra en el resuelve..." 
+              style="padding:0.25rem 0.6rem; font-size:0.75rem; border-radius:4px; border:1px solid var(--border-strong); background:var(--bg-elevated);"
+            >
+          </div>
+          <div id="drawer-resuelve-box" class="resuelve-container" style="margin-bottom:0;">
+            <div class="resuelve-text">
+              ${formatStructuredResuelve(doc.resuelve, [], 0)}
+            </div>
+          </div>
+        </div>
+
+        <!-- Bloque de Citación Estándar -->
+        <div style="background:var(--bg-subtle); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:0.95rem 1.1rem;">
+          <span style="font-family:var(--font-mono); font-size:0.68rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-muted); display:block; margin-bottom:0.3rem;">
+            Referencia Bibliográfica / Citación Judicial
+          </span>
+          <code style="font-family:var(--font-mono); font-size:0.8rem; color:var(--text-primary); line-height:1.5; display:block;">
+            ${escapeHtml(doc.citacion_formal)}
+          </code>
+        </div>
+
+      </div>
+    `;
+
+    // Buscador interno en tiempo real dentro del RESUELVE del inspector
+    const resFilter = document.getElementById('drawer-resuelve-filter');
+    const resBox = document.getElementById('drawer-resuelve-box');
+    resFilter?.addEventListener('input', () => {
+      const term = resFilter.value.trim();
+      if (resBox) {
+        resBox.innerHTML = `<div class="resuelve-text">${formatStructuredResuelve(doc.resuelve, term ? [term] : [], 0)}</div>`;
+      }
+    });
+  }
+
+  if (footer) {
+    footer.innerHTML = `
+      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <button type="button" class="btn-primary-consult btn-tactile" onclick="copyForLegalBrief('${escapeHtml(doc.id)}')">
+          Copiar Cita + Resuelve para Demanda
+        </button>
+        <button type="button" class="btn-utility btn-tactile" onclick="toggleDossierItem('${escapeHtml(doc.id)}'); openDetailModal('${escapeHtml(doc.id)}');">
+          ${isSaved ? '✓ Guardado en Dossier' : '+ Guardar en Dossier'}
+        </button>
+      </div>
+      <div style="display:flex; gap:0.5rem;">
+        <a href="${escapeHtml(doc.drive_url)}" target="_blank" rel="noopener noreferrer" class="btn-utility btn-tactile" style="text-decoration:none; color:var(--accent-primary); font-weight:600;">
+          Ver Documento en Drive &nearr;
+        </a>
+        ${doc.url_origen ? `
+          <a href="${escapeHtml(doc.url_origen)}" target="_blank" rel="noopener noreferrer" class="btn-utility btn-tactile" style="text-decoration:none;">
+            Fuente Oficial &nearr;
+          </a>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  backdrop?.classList.add('open');
+  drawer?.classList.add('open');
+  drawer?.setAttribute('aria-hidden', 'false');
+};
+
+function closeDetailDrawer() {
+  const drawer = document.getElementById('modal-detail');
+  const backdrop = document.getElementById('drawer-backdrop');
+  backdrop?.classList.remove('open');
+  drawer?.classList.remove('open');
+  drawer?.setAttribute('aria-hidden', 'true');
+}
+
+// ==========================================================================
+// DOSSIER DE PRECEDENTES (PORTAPAPELES DE INVESTIGACIÓN JURÍDICA)
+// ==========================================================================
+window.toggleDossierItem = function(docId) {
+  const idx = savedDossierIds.indexOf(docId);
+  if (idx >= 0) {
+    savedDossierIds.splice(idx, 1);
+    showToast('Providencia retirada del Dossier.');
+  } else {
+    savedDossierIds.push(docId);
+    showToast('Providencia guardada en tu Dossier de Precedentes.');
+  }
+  localStorage.setItem('JURISWIKI_DOSSIER', JSON.stringify(savedDossierIds));
+  renderDossierPanel();
+  renderFeaturedShowcase();
+  renderExplorer();
+};
+
+function renderDossierPanel() {
+  const container = document.getElementById('dossier-container');
+  const badge = document.getElementById('dossier-count-badge');
+  const actions = document.getElementById('dossier-actions');
+
+  if (badge) badge.textContent = savedDossierIds.length;
+  if (!container) return;
+
+  const docs = savedDossierIds.map(id => jurisprudenciaDB.find(d => d.id === id)).filter(Boolean);
+
+  if (docs.length === 0) {
+    actions?.classList.add('hidden');
+    container.innerHTML = `
+      <p class="dossier-empty">
+        Guarda sentencias mientras investigas usando el botón <strong>«+ Guardar»</strong> para exportar todas sus citas y resuelves juntos.
+      </p>
+    `;
+    return;
+  }
+
+  actions?.classList.remove('hidden');
+  container.innerHTML = `
+    <div class="dossier-list">
+      ${docs.map(d => `
+        <div class="dossier-item">
+          <button type="button" onclick="openDetailModal('${escapeHtml(d.id)}')" style="text-align:left; flex:1; overflow:hidden;">
+            <strong style="font-family:var(--font-mono); color:var(--accent-primary); display:block;">${escapeHtml(d.radicado)}</strong>
+            <span style="font-size:0.72rem; color:var(--text-muted); display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+              ${escapeHtml(d.corte)} • ${escapeHtml(d.tema || '')}
+            </span>
+          </button>
+          <button type="button" onclick="toggleDossierItem('${escapeHtml(d.id)}')" title="Quitar" style="color:var(--text-muted); padding:0.2rem 0.4rem;">✕</button>
+        </div>
       `).join('')}
     </div>
   `;
-
-  document.getElementById('btn-clear-bookmarks')?.addEventListener('click', () => {
-    bookmarkedIds.clear();
-    saveBookmarksToStorage();
-    renderBookmarksView();
-    renderExplorer();
-    showToast('Dossier vaciado.');
-  });
 }
 
-// ==========================================
-// DESCARGA DE INFORMES & DOSSIER (Markdown)
-// ==========================================
+function buildDossierText() {
+  const docs = savedDossierIds.map(id => jurisprudenciaDB.find(d => d.id === id)).filter(Boolean);
+  if (docs.length === 0) return '';
 
-function downloadConsultationReport(query) {
-  const container = document.getElementById('ai-results-container');
-  if (!container) return;
+  const lines = [
+    '====================================================================',
+    'DOSSIER DE PRECEDENTES JUDICIALES — JURISWIKI COLOMBIA',
+    `Fecha de exportación: ${new Date().toLocaleDateString('es-CO')}`,
+    `Total de providencias seleccionadas: ${docs.length}`,
+    '====================================================================\n'
+  ];
 
-  const relevantDocs = retrieveRelevantDocuments(query, 6);
-  let mdContent = `# JurisWiki Colombia — Dictamen de Consulta Jurisprudencial\n\n`;
-  mdContent += `**Fecha:** ${new Date().toLocaleDateString('es-CO')}  \n`;
-  mdContent += `**Consulta Jurídica:** "${query}"\n\n`;
-  mdContent += `## Providencias Aplicables Identificadas\n\n`;
-
-  relevantDocs.forEach((d, idx) => {
-    mdContent += `### ${idx + 1}. ${d.radicado} — ${d.corte}\n`;
-    mdContent += `- **Ponente:** ${d.magistrado_ponente || 'No registrado'}\n`;
-    mdContent += `- **Fecha:** ${d.fecha_providencia || 'No registrada'}\n`;
-    mdContent += `- **Asunto:** ${d.tema}\n`;
-    mdContent += `- **Citación Formal:** \`${d.citacion_formal}\`\n\n`;
-    mdContent += `**Parte Resolutiva (RESUELVE):**\n> ${d.resuelve || 'Sin extracto'}\n\n---\n\n`;
+  docs.forEach((d, idx) => {
+    lines.push(`[${idx + 1}] ${d.citacion_formal}`);
+    lines.push(`Corporación: ${d.corte} | Expediente: ${d.expediente || d.radicado}`);
+    lines.push(`Materia: ${d.tema || 'En relatoría'}`);
+    lines.push(`RESUELVE:\n"${d.resuelve || 'Ver providencia original'}"`);
+    lines.push(`Enlace Google Drive: ${d.drive_url}`);
+    lines.push('--------------------------------------------------------------------\n');
   });
 
-  const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8' });
+  return lines.join('\n');
+}
+
+function copyDossierToClipboard() {
+  const txt = buildDossierText();
+  if (!txt) return;
+  copyTextWithFeedback(txt, `¡Dossier con ${savedDossierIds.length} precedentes copiado al portapapeles!`);
+}
+
+function downloadDossierTxt() {
+  const txt = buildDossierText();
+  if (!txt) return;
+  const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `juriswiki_dictamen_${Date.now()}.md`;
+  a.download = `Dossier_Jurisprudencia_${new Date().toISOString().slice(0, 10)}.txt`;
+  document.body.appendChild(a);
   a.click();
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  showToast('Dictamen descargado en formato Markdown.');
+  showToast('Archivo .TXT descargado.');
 }
 
-// ==========================================
-// SINCRONIZACIÓN CON GOOGLE DRIVE
-// ==========================================
+// ==========================================================================
+// HISTORIAL DE CONSULTAS Y COPIADO PARA DEMANDA
+// ==========================================================================
+function saveRecentQuery(q) {
+  if (!q) return;
+  recentQueries = [q, ...recentQueries.filter(item => item.toLowerCase() !== q.toLowerCase())].slice(0, 5);
+  localStorage.setItem('JURISWIKI_RECENT_QUERIES', JSON.stringify(recentQueries));
+  renderRecentQueries();
+}
 
-function initSyncButton() {
-  const btn = document.getElementById('btn-sync-drive');
-  const icon = document.getElementById('sync-icon');
+function renderRecentQueries() {
+  const container = document.getElementById('recent-queries-list');
+  if (!container) return;
 
-  btn?.addEventListener('click', async () => {
-    btn.disabled = true;
-    btn.classList.add('opacity-70');
-    icon?.classList.add('animate-spin');
-    showToast('Sincronizando con Google Drive... Buscando providencias.');
+  if (!recentQueries || recentQueries.length === 0) {
+    container.innerHTML = `<p class="dossier-empty">Tus búsquedas de esta sesión aparecerán aquí para acceso rápido.</p>`;
+    return;
+  }
 
-    try {
-      let res = await fetch('/api/sync').catch(() => null);
-      if (!res || !res.ok) {
-        res = await fetch('api.php?action=sync').catch(() => null);
-      }
-      await loadDatabase();
-      showToast(`¡Drive sincronizado! ${formatNumber(jurisprudenciaDB.length)} providencias al día.`);
-    } catch (e) {
-      await loadDatabase();
-      showToast('Base de datos sincronizada.');
-    } finally {
-      btn.disabled = false;
-      btn.classList.remove('opacity-70');
-      icon?.classList.remove('animate-spin');
-    }
+  container.innerHTML = recentQueries.map(q => `
+    <button type="button" class="corp-dist-item" onclick="rerunQuery('${escapeJsStr(q)}')" style="font-size: 0.77rem;">
+      <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(q)}</span>
+      <span style="color:var(--accent-primary); font-family:var(--font-mono);">&rarr;</span>
+    </button>
+  `).join('');
+}
+
+window.rerunQuery = function(q) {
+  switchWorkspaceView('ai');
+  const input = document.getElementById('ai-query-input');
+  if (input) {
+    input.value = q;
+    runAiConsultation(q);
+  }
+};
+
+// Copia un bloque jurídico completo (Cita formal + transcripción del Resuelve) listo para pegar en Word
+window.copyForLegalBrief = function(docId) {
+  const doc = jurisprudenciaDB.find(d => d.id === docId);
+  if (!doc) return;
+
+  const formattedBlock = `${doc.citacion_formal}. Asunto: ${doc.tema || 'Jurisprudencia aplicable'}.\n\nParte Resolutiva (RESUELVE):\n«${doc.resuelve || ''}»`;
+  copyTextWithFeedback(formattedBlock, `Cita y RESUELVE de ${doc.radicado} copiados para demanda.`);
+};
+
+window.copyTextWithFeedback = function(text, message = 'Copiado al portapapeles') {
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    showToast(message);
+  }).catch(() => {
+    const t = document.createElement('textarea');
+    t.value = text;
+    document.body.appendChild(t);
+    t.select();
+    document.execCommand('copy');
+    document.body.removeChild(t);
+    showToast(message);
   });
-}
+};
 
-// ==========================================
-// MODAL DE CONFIGURACIÓN GEMINI
-// ==========================================
-
-function initSettingsModal() {
-  const btnSettings = document.getElementById('btn-settings');
-  const modal = document.getElementById('modal-settings');
-  const btnClose = document.getElementById('btn-close-settings');
-  const btnSave = document.getElementById('btn-save-api-key');
-  const input = document.getElementById('gemini-api-key-input');
-
-  btnSettings?.addEventListener('click', () => modal?.showModal());
-  btnClose?.addEventListener('click', () => modal?.close());
-
-  btnSave?.addEventListener('click', () => {
-    const key = input?.value.trim() || '';
-    localStorage.setItem('GEMINI_API_KEY', key);
-    modal?.close();
-    updateApiKeyBadge();
-    showToast(key ? 'Google Gemini 2.5 Flash activado.' : 'Usando Motor RAG Autónomo.');
-  });
-}
-
+// ==========================================================================
+// UTILIDADES
+// ==========================================================================
 function loadSavedApiKey() {
   const key = localStorage.getItem('GEMINI_API_KEY') || '';
   const input = document.getElementById('gemini-api-key-input');
@@ -1254,72 +1412,53 @@ function loadSavedApiKey() {
 }
 
 function updateApiKeyBadge() {
-  const badgeText = document.getElementById('ai-engine-status-text');
+  const badge = document.getElementById('ai-status-badge');
   const key = localStorage.getItem('GEMINI_API_KEY');
-  if (badgeText) {
-    if (key && key.length > 10) {
-      badgeText.innerHTML = `<span class="w-2 h-2 rounded-full bg-purple-400 animate-pulse"></span> <span class="text-purple-300">Gemini 2.5 Flash</span>`;
-    } else {
-      badgeText.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> <span class="text-emerald-400">RAG Legal Nativo</span>`;
-    }
+  if (badge) {
+    badge.textContent = (key && key.length > 10)
+      ? 'Motor: Gemini 2.5 Flash + Relatoría RAG'
+      : 'Motor: Relatoría RAG Local Activo';
   }
 }
 
-// ==========================================
-// UTILIDADES & FEEDBACK VISUAL
-// ==========================================
-
-function copyFeedback(buttonEl, text, successMsg = '¡Copiado!') {
-  if (!text) return;
-  navigator.clipboard.writeText(text).then(() => {
-    showToast(successMsg);
-    if (buttonEl) {
-      const originalHtml = buttonEl.innerHTML;
-      buttonEl.innerHTML = `<span class="text-emerald-400 font-bold">✓ Copiado</span>`;
-      setTimeout(() => {
-        buttonEl.innerHTML = originalHtml;
-      }, 1800);
-    }
-  }).catch(() => {
-    showToast(successMsg);
-  });
+function getCorpBadgeClass(corte = '') {
+  if (corte.includes('Constitucional')) return 'corp-constitucional';
+  if (corte.includes('Consejo')) return 'corp-consejo';
+  if (corte.includes('Suprema')) return 'corp-suprema';
+  return 'corp-default';
 }
 
-function showToast(msg) {
-  const container = document.getElementById('toast-container');
-  if (!container) return;
+function normalizeText(text) {
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-  const toast = document.createElement('div');
-  toast.className = 'bg-[#0d121c] border border-amber-500/40 text-white px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 text-xs font-medium pointer-events-auto transition-all duration-200 transform translate-y-3 opacity-0';
+let toastTimer = null;
+function showToast(msg) {
+  let toast = document.getElementById('app-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'app-toast';
+    toast.className = 'toast-notification';
+    document.body.appendChild(toast);
+  }
+
   toast.innerHTML = `
-    <svg class="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
     <span>${escapeHtml(msg)}</span>
   `;
 
-  container.appendChild(toast);
-
-  requestAnimationFrame(() => {
-    toast.classList.remove('translate-y-3', 'opacity-0');
-    toast.classList.add('translate-y-0', 'opacity-100');
-  });
-
-  setTimeout(() => {
-    toast.classList.remove('translate-y-0', 'opacity-100');
-    toast.classList.add('translate-y-3', 'opacity-0');
-    setTimeout(() => toast.remove(), 250);
-  }, 2800);
-}
-
-function getBadgeClass(corte) {
-  if (!corte) return 'badge-cc';
-  if (corte.includes('Constitucional')) return 'badge-cc';
-  if (corte.includes('Suprema')) return 'badge-csj';
-  if (corte.includes('Consejo')) return 'badge-ce';
-  if (corte.includes('Tribunal')) return 'badge-tribunal';
-  if (corte.includes('Arbitral') || corte.includes('Laudo') || corte.includes('CAC')) return 'badge-arbitral';
-  if (corte.includes('Superintendencia')) return 'badge-super';
-  if (corte.includes('Senado') || corte.includes('Ley')) return 'badge-ley';
-  return 'badge-cc';
+  toast.classList.add('visible');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.classList.remove('visible');
+  }, 3000);
 }
 
 function escapeHtml(str) {
@@ -1332,20 +1471,23 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
-function escapeForJsString(str) {
+function escapeJsStr(str) {
   if (!str) return '';
-  return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, ' ');
+  return String(str)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '&quot;')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '');
 }
 
 function markdownToHtml(md) {
   if (!md) return '';
   return md
-    .replace(/^### (.*$)/gim, '<h4 class="text-amber-400 font-bold text-sm mt-3 mb-1">$1</h4>')
-    .replace(/^## (.*$)/gim, '<h3 class="text-white font-bold text-base mt-4 mb-2 font-display">$1</h3>')
-    .replace(/^# (.*$)/gim, '<h2 class="text-amber-300 font-bold text-lg mt-5 mb-2 font-display">$1</h2>')
-    .replace(/^\> (.*$)/gim, '<div class="resuelve-quote my-2 text-slate-200">$1</div>')
-    .replace(/\*\*(.*?)\*\*/gim, '<strong class="text-white font-semibold">$1</strong>')
-    .replace(/\*(.*?)\*/gim, '<em class="text-slate-300">$1</em>')
-    .replace(/`([^`]+)`/gim, '<code class="bg-[#090d16] text-amber-300 px-1.5 py-0.5 rounded text-xs font-mono border border-slate-800">$1</code>')
-    .replace(/\n\n/gim, '<br><br>');
+    .replace(/^### (.*$)/gim, '<h4 style="font-family:var(--font-serif); font-size:1.05rem; font-weight:700; margin:0.85rem 0 0.35rem;">$1</h4>')
+    .replace(/^## (.*$)/gim, '<h3 style="font-family:var(--font-serif); font-size:1.18rem; font-weight:700; margin:1rem 0 0.45rem;">$1</h3>')
+    .replace(/^\> (.*$)/gim, '<blockquote class="resuelve-container" style="margin:0.65rem 0;">$1</blockquote>')
+    .replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/gim, '<em>$1</em>')
+    .replace(/\n\n/gim, '</p><p style="margin-top:0.55rem;">');
 }

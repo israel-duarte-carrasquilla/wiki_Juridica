@@ -55,6 +55,7 @@ for fn in sorted(os.listdir(json_dir)):
     ano = d.get('ano') or ''
     tipo = clean_str(d.get('tipo') or '')
     magistrado = clean_str(d.get('magistrado_ponente') or '')
+    magistrado = re.sub(r'^[\*\s\-]+|[\*\s\-]+$', '', magistrado).strip()
     fecha = clean_str(d.get('fecha_providencia') or '')
     expediente = clean_str(d.get('expediente') or '')
     tema = clean_str(d.get('tema') or '')
